@@ -1,0 +1,1 @@
+export default function Consultar(){ return <div>Consultar</div> }

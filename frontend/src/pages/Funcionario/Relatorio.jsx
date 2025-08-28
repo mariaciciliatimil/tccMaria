@@ -1,0 +1,1 @@
+export default function Relatorio(){ return <div>Relatório</div> }

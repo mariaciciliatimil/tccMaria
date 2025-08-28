@@ -1,0 +1,43 @@
+# Dependências
+node_modules/
+
+# Builds / artefatos
+dist/
+build/
+frontend/dist/
+backend/dist/
+*.zip
+
+# Variáveis de ambiente (mantenha apenas os exemplos)
+.env
+.env.*
+frontend/.env
+backend/.env
+!frontend/.env.example
+!backend/.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Caches e temporários
+.cache/
+.tmp/
+temp/
+tmp/
+.vite/
+frontend/.vite/
+coverage/
+
+# SO / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+
+# Outros
+*.local

@@ -1,0 +1,1 @@
+export default function Bandejas(){ return <div>Bandejas</div> }
