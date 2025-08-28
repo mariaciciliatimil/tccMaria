@@ -11,6 +11,7 @@ import Bandejas from './pages/Funcionario/Bandejas.jsx'
 import Patologista from './pages/Patologista.jsx'
 import Protected from './shared/Protected.jsx'
 import StatusBoard from './components/StatusBoard.jsx'
+import Pacientes from './pages/Funcionario/Pacientes.jsx'
 
 const router = createBrowserRouter([
   { path: '/', element: <Login /> },
@@ -21,6 +22,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <StatusBoard /> },
       { path: 'iniciar', element: <Iniciar /> },
+      { path: 'pacientes', element: <Pacientes /> }, // <- ADICIONADO
       { path: 'consultar', element: <Consultar /> },
       { path: 'relatorio', element: <Relatorio /> },
       { path: 'bandejas', element: <Bandejas /> },
