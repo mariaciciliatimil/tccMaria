@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom'
 const MENU = [
   { label: 'INICIAR PACIENTE', to: '/funcionario/iniciar' },
   { label: 'PACIENTES',        to: '/funcionario/pacientes' },
+  { label: 'STATUS',           to: '/funcionario/status' },
   { label: 'CONSULTAR',        to: '/funcionario/consultar' },
   { label: 'RELATÓRIO',        to: '/funcionario/relatorio' },
   { label: 'BANDEJAS',         to: '/funcionario/bandejas' },

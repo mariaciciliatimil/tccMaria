@@ -1,6 +1,7 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
+
 import Login from './pages/Login.jsx'
 import Admin from './pages/Admin.jsx'
 import Funcionario from './pages/Funcionario.jsx'
@@ -9,9 +10,11 @@ import Consultar from './pages/Funcionario/Consultar.jsx'
 import Relatorio from './pages/Funcionario/Relatorio.jsx'
 import Bandejas from './pages/Funcionario/Bandejas.jsx'
 import Patologista from './pages/Patologista.jsx'
+
 import Protected from './shared/Protected.jsx'
 import StatusBoard from './components/StatusBoard.jsx'
 import Pacientes from './pages/Funcionario/Pacientes.jsx'
+import Status from './pages/Funcionario/Status.jsx'
 
 const router = createBrowserRouter([
   { path: '/', element: <Login /> },
@@ -22,7 +25,8 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <StatusBoard /> },
       { path: 'iniciar', element: <Iniciar /> },
-      { path: 'pacientes', element: <Pacientes /> }, // <- ADICIONADO
+      { path: 'pacientes', element: <Pacientes /> },
+      { path: 'status', element: <Status /> },      // <- nova rota do Módulo III
       { path: 'consultar', element: <Consultar /> },
       { path: 'relatorio', element: <Relatorio /> },
       { path: 'bandejas', element: <Bandejas /> },
