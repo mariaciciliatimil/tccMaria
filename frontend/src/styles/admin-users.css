@@ -1,0 +1,32 @@
+/* src/styles/admin-users.css */
+:root{
+  --bg:#a9c7d4; --card:#f3f6fb; --ink:#1c2a39; --muted:#59667a;
+  --radius:16px; --shadow:0 10px 30px rgba(17,27,39,.18);
+}
+.admin-shell{min-height:100vh;background:var(--bg);padding:40px 24px;}
+.admin-content{max-width:1100px;margin:0 auto;}
+.admin-header{max-width:1100px;margin:0 auto 24px;display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;}
+.admin-header__titleblock{grid-column:1 / -1;text-align:center;}
+.admin-title{font-size:40px;line-height:1;margin:0;color:var(--ink);font-weight:800;}
+.admin-subtitle{margin-top:8px;color:var(--muted);}
+.btn-primary{justify-self:center;padding:12px 18px;background:linear-gradient(120deg,#6aa3ff,#6b5bff 60%,#7ad7ff);color:#fff;border-radius:14px;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:8px;box-shadow:var(--shadow);}
+.btn-shadow{box-shadow:var(--shadow);}
+.users-card{background:var(--card);border-radius:22px;padding:24px;box-shadow:var(--shadow);}
+.users-card__head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:10px;}
+.users-card__title{margin:0;color:var(--ink);font-size:28px;font-weight:800;}
+.users-card__desc{margin:4px 0 0;color:var(--muted);}
+.users-toolbar{display:flex;gap:12px;margin:16px 0 20px;}
+.input,.select{background:#eef3fb;border:1px solid #dbe5f3;padding:10px 12px;border-radius:12px;color:var(--ink);}
+.input{flex:1;}
+.users-table{display:grid;gap:10px;}
+.users-row{display:grid;grid-template-columns:1.2fr 1.4fr 1fr .7fr 1.2fr;gap:12px;align-items:center;background:#fff;padding:14px;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.04);}
+.users-row--head{background:transparent;box-shadow:none;font-weight:700;color:var(--muted);}
+.muted{color:var(--muted);}
+.ellipsis{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.badge{padding:6px 10px;border-radius:24px;font-weight:700;font-size:12px;display:inline-block;}
+.badge--ok{background:#d3f7d9;color:#0e6b2f;}
+.badge--warn{background:#ffd4d1;color:#8a1611;}
+.actions{display:flex;gap:10px;}
+.btn-outline{border:2px solid #ffb3ad;background:#ffe9e7;color:#8a1611;padding:8px 12px;border-radius:14px;font-weight:700;}
+.btn-ghost{background:#eef3fb;border:1px solid #dbe5f3;padding:8px 12px;border-radius:14px;font-weight:700;color:#172b4d;}
+.users-form{display:grid;gap:12px;}
