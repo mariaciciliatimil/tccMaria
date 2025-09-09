@@ -1,7 +1,12 @@
 import { Router } from 'express';
 import { query } from '../db.js';
+
 const router = Router();
-router.get('/board', async (req, res) => {
+
+/**
+ * BOARD: PENDENTE | EM_PREPARO_INICIAL | CONCLUIDO
+ */
+router.get('/board', async (_req, res) => {
   const countsSql = `
     WITH last_steps AS (
       SELECT DISTINCT ON (exam_id) exam_id, status
@@ -13,14 +18,20 @@ router.get('/board', async (req, res) => {
     LEFT JOIN last_steps ls ON ls.exam_id = e.id
     GROUP BY COALESCE(ls.status, 'PENDENTE')
   `;
+
   const itemsSql = `
     WITH last_steps AS (
       SELECT DISTINCT ON (exam_id) exam_id, status
       FROM exam_steps
       ORDER BY exam_id, started_at DESC, id DESC
     )
-    SELECT e.id, e.type, e.priority, COALESCE(ls.status,'PENDENTE') AS status,
-           p.name AS patient_name, e.created_at
+    SELECT
+      e.id,
+      e.type,
+      e.priority,
+      COALESCE(ls.status,'PENDENTE') AS status,
+      p.name AS patient_name,
+      e.created_at
     FROM exams e
     LEFT JOIN last_steps ls ON ls.exam_id = e.id
     LEFT JOIN patients p ON p.id = e.patient_id
@@ -28,16 +39,128 @@ router.get('/board', async (req, res) => {
     ORDER BY e.created_at DESC
     LIMIT 20
   `;
+
   try {
     const countsRes = await query(countsSql);
-    const counts = { PENDENTE: 0, EM_ANDAMENTO: 0, CONCLUIDO: 0 };
-    for (const r of countsRes.rows) counts[r.status] = r.count;
-    const [pend, prog, done] = await Promise.all([
+    const counts = { PENDENTE: 0, EM_PREPARO_INICIAL: 0, CONCLUIDO: 0 };
+    for (const r of countsRes.rows) if (counts[r.status] !== undefined) counts[r.status] = r.count;
+
+    const [pend, prep, done] = await Promise.all([
       query(itemsSql, ['PENDENTE']),
-      query(itemsSql, ['EM_ANDAMENTO']),
+      query(itemsSql, ['EM_PREPARO_INICIAL']),
       query(itemsSql, ['CONCLUIDO']),
     ]);
-    res.json({ counts, columns: { PENDENTE: pend.rows, EM_ANDAMENTO: prog.rows, CONCLUIDO: done.rows } });
-  } catch (e) { console.error(e); res.status(500).json({ error: 'Erro ao montar board' }); }
+
+    res.json({
+      counts,
+      columns: {
+        PENDENTE: pend.rows,
+        EM_PREPARO_INICIAL: prep.rows,
+        CONCLUIDO: done.rows
+      }
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Erro ao montar board' });
+  }
 });
+
+/**
+ * (Opcional) Filtro simples: /exams?patient_id=123
+ * Útil como fallback do modal caso /patients/:id/exams não exista.
+ */
+router.get('/', async (req, res) => {
+  try {
+    const { patient_id } = req.query;
+    if (patient_id) {
+      const r = await query(
+        `SELECT id, type, priority, created_at
+           FROM exams
+          WHERE patient_id = $1
+          ORDER BY created_at DESC`,
+        [patient_id]
+      );
+      return res.json(r.rows);
+    }
+    const r = await query(`SELECT id, type, priority, created_at FROM exams ORDER BY created_at DESC LIMIT 50`);
+    res.json(r.rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Erro ao listar exames' });
+  }
+});
+
+/**
+ * INICIAR PREPARO
+ * - Permite apenas se último status for PENDENTE (ou inexistente => PENDENTE)
+ * - Atualiza prep_laminas / prep_responsavel / prep_started_at em exams
+ * - Insere passo: step='PREPARO_INICIAL', status='EM_PREPARO_INICIAL'
+ */
+router.post('/:id/start-prep', async (req, res) => {
+  const examId = Number(req.params.id);
+  const { laminas, responsavel } = req.body || {};
+
+  if (!examId) return res.status(400).json({ error: 'Exame inválido.' });
+  if (!laminas || Number(laminas) <= 0)
+    return res.status(400).json({ error: 'Informe a quantidade de lâminas (> 0).' });
+  if (!responsavel || !String(responsavel).trim())
+    return res.status(400).json({ error: 'Informe o responsável.' });
+
+  try {
+    await query('BEGIN');
+
+    // Exame existe?
+    const e = await query('SELECT id FROM exams WHERE id = $1', [examId]);
+    if (e.rowCount === 0) {
+      await query('ROLLBACK');
+      return res.status(404).json({ error: 'Exame não encontrado.' });
+    }
+
+    // Último status (se não houver, consideramos PENDENTE)
+    const last = await query(
+      `SELECT status
+         FROM exam_steps
+        WHERE exam_id = $1
+        ORDER BY started_at DESC, id DESC
+        LIMIT 1`,
+      [examId]
+    );
+    const lastStatus = last.rowCount ? last.rows[0].status : 'PENDENTE';
+    if (lastStatus !== 'PENDENTE') {
+      await query('ROLLBACK');
+      return res.status(409).json({ error: `Exame não está pendente (status atual: ${lastStatus}).` });
+    }
+
+    // Atualiza dados do preparo no exame (sem updated_at)
+    await query(
+      `UPDATE exams
+          SET prep_laminas = $1,
+              prep_responsavel = $2,
+              prep_started_at = NOW()
+        WHERE id = $3`,
+      [Number(laminas), String(responsavel).trim(), examId]
+    );
+
+    // Registra o passo de PREPARO_INICIAL (com coluna step)
+    await query(
+      `INSERT INTO exam_steps (exam_id, step, status, started_at)
+       VALUES ($1, 'PREPARO_INICIAL', 'EM_PREPARO_INICIAL', NOW())`,
+      [examId]
+    );
+
+    await query('COMMIT');
+
+    res.json({
+      id: examId,
+      status: 'EM_PREPARO_INICIAL',
+      prep_laminas: Number(laminas),
+      prep_responsavel: String(responsavel).trim()
+    });
+  } catch (err) {
+    console.error('start-prep error:', err);
+    try { await query('ROLLBACK'); } catch {}
+    res.status(500).json({ error: 'Erro ao iniciar preparo do exame' });
+  }
+});
+
 export default router;

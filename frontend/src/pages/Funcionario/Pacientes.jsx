@@ -17,10 +17,20 @@ export default function Pacientes() {
   const [editing, setEditing] = useState(null) // {id,name,birthdate,convenio_id}
   const [form, setForm] = useState({ name: '', birthdate: '', convenio_id: '' })
 
-  // associate exam
-  const [examOpenId, setExamOpenId] = useState(null)
-  const [examType, setExamType] = useState(EXAM_TYPES[0].value)
-  const [examUrg, setExamUrg] = useState(false)
+  // === MODAL: iniciar preparo ===
+  const [prepOpen, setPrepOpen] = useState(false)
+  const [prepPatient, setPrepPatient] = useState(null)
+  const [prepLoading, setPrepLoading] = useState(false)
+  const [prepError, setPrepError] = useState('')
+  const [prepExams, setPrepExams] = useState([]) // exames do paciente
+  const [prepExamId, setPrepExamId] = useState('')
+  const [prepLaminas, setPrepLaminas] = useState('')
+  const [prepResp, setPrepResp] = useState(localStorage.getItem('userName') || '')
+
+  // (mantive se você ainda usa noutros lugares)
+  const [examOpenId] = useState(null)
+  const [examType] = useState(EXAM_TYPES[0].value)
+  const [examUrg] = useState(false)
 
   const headers = useMemo(() => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` }), [])
 
@@ -70,16 +80,64 @@ export default function Pacientes() {
     setForm({ name:'', birthdate:'', convenio_id:'' })
     load()
   }
-  async function associateExam(id) {
-    setMsg('')
-    const res = await fetch(`${API}/patients/${id}/exams`, {
-      method: 'POST', headers, body: JSON.stringify({ type: examType, urgency: examUrg })
-    })
-    const data = await res.json()
-    if (!res.ok) return setMsg(data.error || 'Falha ao associar exame')
-    setMsg(`Exame #${data.exam.id} criado para paciente #${id}`)
-    setExamOpenId(null); setExamType(EXAM_TYPES[0].value); setExamUrg(false)
-    load()
+
+  // === Fluxo do modal de preparo ===
+  const openPrep = async (patient) => {
+    setPrepPatient(patient)
+    setPrepOpen(true)
+    setPrepLoading(true)
+    setPrepError('')
+    setPrepExams([])
+    setPrepExamId('')
+    try {
+      // tenta rota /patients/:id/exams; se não existir, tenta /exams?patient_id=...
+      let res = await fetch(`${API}/patients/${patient.id}/exams`, { headers: { Authorization: `Bearer ${token()}` } })
+      if (res.status === 404) {
+        res = await fetch(`${API}/exams?patient_id=${patient.id}`, { headers: { Authorization: `Bearer ${token()}` } })
+      }
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || 'Falha ao carregar exames do paciente')
+      const list = Array.isArray(data) ? data : (data.items || [])
+      setPrepExams(list)
+      setPrepExamId(list?.[0]?.id || '')
+    } catch (e) {
+      setPrepError(e.message)
+    } finally {
+      setPrepLoading(false)
+    }
+  }
+
+  const closePrep = () => {
+    setPrepOpen(false)
+    setPrepPatient(null)
+    setPrepError('')
+    setPrepExams([])
+    setPrepExamId('')
+    setPrepLaminas('')
+    setPrepResp(localStorage.getItem('userName') || '')
+  }
+
+  const savePrep = async () => {
+    try {
+      setPrepError('')
+      if (!prepExamId) return setPrepError('Selecione um exame.')
+      if (!prepLaminas || Number(prepLaminas) <= 0) return setPrepError('Informe a quantidade de lâminas (>0).')
+      if (!prepResp.trim()) return setPrepError('Informe o responsável.')
+
+      const res = await fetch(`${API}/exams/${prepExamId}/start-prep`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ laminas: Number(prepLaminas), responsavel: prepResp })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || 'Falha ao iniciar preparo')
+
+      setMsg(`Preparo iniciado no exame #${data.id} (${data.status}).`)
+      closePrep()
+      load() // só para refletir caso mostre algo derivado
+    } catch (e) {
+      setPrepError(e.message)
+    }
   }
 
   const input = { width:'100%', padding:'10px 12px', border:'1px solid #ccc', borderRadius:8, marginBottom:10 }
@@ -122,7 +180,7 @@ export default function Pacientes() {
         </form>
       )}
 
-      {msg && <div style={{color: msg.startsWith('Exame') || msg.includes('atualizado') || msg.includes('criado') ? '#0f766e' : '#b00020'}}>{msg}</div>}
+      {msg && <div style={{color: msg.toLowerCase().includes('falha') ? '#b00020' : '#0f766e'}}>{msg}</div>}
 
       <div style={{background:'#fff', padding:16, borderRadius:12, boxShadow:'0 8px 24px rgba(0,0,0,.06)'}}>
         <h3 style={{marginTop:0}}>Pacientes {loading && <small style={{color:'#777'}}>carregando...</small>}</h3>
@@ -144,28 +202,15 @@ export default function Pacientes() {
                 <td style={{padding:8}}>
                   <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
                     <button onClick={()=>startEdit(p)} style={{padding:'6px 10px', borderRadius:8, border:'1px solid #ccc', background:'#fff'}}>Editar</button>
-                    <button onClick={()=>setExamOpenId(examOpenId===p.id?null:p.id)} style={{padding:'6px 10px', borderRadius:8, border:'1px solid #ccc', background:'#fff'}}>Associar exame</button>
+
+                    {/* Substitui "Associar exame" por "Iniciar preparo" */}
+                    <button
+                      onClick={()=>openPrep(p)}
+                      style={{padding:'6px 10px', borderRadius:8, border:'1px solid #ccc', background:'#fff'}}
+                    >
+                      Iniciar preparo
+                    </button>
                   </div>
-                  {examOpenId === p.id && (
-                    <div style={{marginTop:8, background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:8, padding:12}}>
-                      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
-                        <div>
-                          <label style={label}>Tipo</label>
-                          <select style={input} value={examType} onChange={e=>setExamType(e.target.value)}>
-                            {EXAM_TYPES.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}
-                          </select>
-                        </div>
-                        <div style={{display:'flex', alignItems:'center', gap:10, marginTop:26}}>
-                          <input id={`urg-${p.id}`} type="checkbox" checked={examUrg} onChange={e=>setExamUrg(e.target.checked)} />
-                          <label htmlFor={`urg-${p.id}`}>Urgência</label>
-                        </div>
-                      </div>
-                      <div style={{display:'flex', gap:8}}>
-                        <button onClick={()=>associateExam(p.id)} style={{padding:'8px 12px', border:'none', borderRadius:8, background:'#0f766e', color:'#fff', fontWeight:700}}>Criar exame</button>
-                        <button onClick={()=>setExamOpenId(null)} style={{padding:'8px 12px', border:'1px solid #ccc', borderRadius:8, background:'#fff'}}>Fechar</button>
-                      </div>
-                    </div>
-                  )}
                 </td>
               </tr>
             ))}
@@ -173,6 +218,66 @@ export default function Pacientes() {
           </tbody>
         </table>
       </div>
+
+      {/* Modal flutuante */}
+      {prepOpen && (
+        <div style={M.backdrop} onClick={closePrep}>
+          <div style={M.modal} onClick={(e)=>e.stopPropagation()}>
+            <h3 style={{marginTop:0}}>Iniciar preparo</h3>
+            <div style={{fontSize:13, color:'#475569', marginBottom:12}}>
+              Paciente: <b>{prepPatient?.name}</b>
+            </div>
+
+            {prepLoading ? (
+              <div>Carregando exames…</div>
+            ) : (
+              <>
+                {prepExams.length === 0 ? (
+                  <div style={{color:'#b00020', marginBottom:12}}>
+                    Este paciente não possui exames para iniciar preparo.
+                  </div>
+                ) : (
+                  <div style={M.field}>
+                    <label>Exame</label>
+                    <select value={prepExamId} onChange={e=>setPrepExamId(e.target.value)} style={M.input}>
+                      {prepExams.map(ex => (
+                        <option key={ex.id} value={ex.id}>
+                          #{ex.id} • {String(ex.type || '').replaceAll('_',' ')} {ex.priority ? '• Prioritário' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div style={M.field}>
+                  <label>Qtd. de lâminas</label>
+                  <input type="number" min="1" value={prepLaminas} onChange={e=>setPrepLaminas(e.target.value)} style={M.input}/>
+                </div>
+                <div style={M.field}>
+                  <label>Responsável</label>
+                  <input type="text" value={prepResp} onChange={e=>setPrepResp(e.target.value)} style={M.input}/>
+                </div>
+
+                {prepError && <div style={{color:'#b00020', marginTop:6}}>{prepError}</div>}
+
+                <div style={{display:'flex', gap:8, justifyContent:'flex-end', marginTop:14}}>
+                  <button onClick={closePrep} style={M.btnGhost}>Cancelar</button>
+                  <button onClick={savePrep} style={M.btnPrimary} disabled={prepExams.length===0}>Salvar</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+const M = {
+  backdrop: { position:'fixed', inset:0, background:'rgba(0,0,0,0.25)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:50 },
+  modal: { width:520, background:'#fff', borderRadius:12, padding:18, boxShadow:'0 10px 30px rgba(0,0,0,.2)' },
+  field: { display:'flex', flexDirection:'column', gap:6, marginBottom:10 },
+  input: { padding:'10px 12px', border:'1px solid #d0d5dd', borderRadius:8, outline:'none' },
+  btnGhost: { padding:'10px 14px', borderRadius:10, border:'1px solid #d0d5dd', background:'#fff', cursor:'pointer' },
+  btnPrimary:{ padding:'10px 14px', borderRadius:10, background:'#0ea5e9', color:'#fff', border:'none', cursor:'pointer' },
 }

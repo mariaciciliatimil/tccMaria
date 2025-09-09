@@ -3,16 +3,16 @@ import { pool, query } from '../db.js'
 
 const router = Router()
 
-// ---- AUTOCOMPLETE / CONVENIOS / INICIAR PACIENTE (já existia) ----
+// ---- AUTOCOMPLETE / CONVENIOS / INICIAR PACIENTE ----
 router.get('/search', async (req, res) => {
   const q = (req.query.name || '').trim()
   if (!q || q.length < 2) return res.json([])
   const { rows } = await query(
     `SELECT id, name, birthdate, convenio_id
-     FROM patients
-     WHERE name ILIKE $1
-     ORDER BY name
-     LIMIT 10`,
+       FROM patients
+      WHERE name ILIKE $1
+      ORDER BY name
+      LIMIT 10`,
     [`%${q}%`]
   )
   res.json(rows)
@@ -37,11 +37,11 @@ router.post('/initiate', async (req, res) => {
     if (p.id) {
       const upd = await client.query(
         `UPDATE patients
-           SET name = COALESCE($1, name),
-               birthdate = COALESCE($2, birthdate),
-               convenio_id = COALESCE($3, convenio_id)
-         WHERE id = $4
-         RETURNING id, name, birthdate, convenio_id`,
+            SET name = COALESCE($1, name),
+                birthdate = COALESCE($2, birthdate),
+                convenio_id = COALESCE($3, convenio_id)
+          WHERE id = $4
+        RETURNING id, name, birthdate, convenio_id`,
         [p.name ?? null, p.birthdate ?? null, p.convenio_id ?? null, p.id]
       )
       if (upd.rowCount === 0) throw new Error('Paciente não encontrado')
@@ -63,10 +63,9 @@ router.post('/initiate', async (req, res) => {
         patient = found
         if (p.convenio_id && p.convenio_id !== found.convenio_id) {
           const up = await client.query(
-            `UPDATE patients
-                SET convenio_id=$1
+            `UPDATE patients SET convenio_id=$1
               WHERE id=$2
-              RETURNING id, name, birthdate, convenio_id`,
+          RETURNING id, name, birthdate, convenio_id`,
             [p.convenio_id, found.id]
           )
           patient = up.rows[0]
@@ -75,7 +74,7 @@ router.post('/initiate', async (req, res) => {
         const ins = await client.query(
           `INSERT INTO patients (name, birthdate, convenio_id)
            VALUES ($1,$2,$3)
-           RETURNING id, name, birthdate, convenio_id`,
+        RETURNING id, name, birthdate, convenio_id`,
           [p.name, p.birthdate || null, p.convenio_id || null]
         )
         patient = ins.rows[0]
@@ -85,14 +84,15 @@ router.post('/initiate', async (req, res) => {
     const exam = (await client.query(
       `INSERT INTO exams (patient_id, type, priority, created_by)
        VALUES ($1,$2,$3,$4)
-       RETURNING id, patient_id, type, priority, created_at`,
+    RETURNING id, patient_id, type, priority, created_at`,
       [patient.id, e.type, !!e.urgency, req.user?.id || null]
     )).rows[0]
 
+    // Passo inicial fica PENDENTE (compatível com o CHECK do schema)
     const step = (await client.query(
       `INSERT INTO exam_steps (exam_id, step, status, responsible_id)
-       VALUES ($1,'RECEPCAO','EM_ANDAMENTO',$2)
-       RETURNING id, exam_id, step, status, started_at`,
+       VALUES ($1,'RECEPCAO','PENDENTE',$2)
+    RETURNING id, exam_id, step, status, started_at`,
       [exam.id, req.user?.id || null]
     )).rows[0]
 
@@ -105,11 +105,11 @@ router.post('/initiate', async (req, res) => {
   } finally {
     client.release()
   }
-}); // <-- FECHA O /initiate AQUI
+})
 
 // ---- MÓDULO II: LISTAR / OBTER / CRIAR / EDITAR / ASSOCIAR EXAME ----
 
-// LISTAR PACIENTES (com busca e paginação simples)
+// LISTAR PACIENTES
 // GET /patients?q=jo&limit=20&offset=0
 router.get('/', async (req, res) => {
   const q = (req.query.q || '').trim()
@@ -136,7 +136,6 @@ router.get('/', async (req, res) => {
 })
 
 // OBTER 1 PACIENTE
-// GET /patients/:id
 router.get('/:id', async (req, res) => {
   const id = Number(req.params.id)
   const { rows } = await query(
@@ -150,8 +149,26 @@ router.get('/:id', async (req, res) => {
   res.json(rows[0])
 })
 
-// RF01 - CADASTRAR PACIENTE
-// POST /patients { name, birthdate, convenio_id }
+// LISTAR EXAMES DO PACIENTE (usado pelo modal "Iniciar preparo")
+// GET /patients/:id/exams
+router.get('/:id/exams', async (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    const r = await query(
+      `SELECT id, type, priority, created_at
+         FROM exams
+        WHERE patient_id = $1
+        ORDER BY created_at DESC`,
+      [id]
+    )
+    res.json(r.rows)
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: 'Erro ao listar exames do paciente' })
+  }
+})
+
+// CADASTRAR PACIENTE
 router.post('/', async (req, res) => {
   const { name, birthdate, convenio_id } = req.body || {}
   if (!name) return res.status(400).json({ error: 'Nome é obrigatório' })
@@ -160,7 +177,7 @@ router.post('/', async (req, res) => {
     const { rows } = await query(
       `INSERT INTO patients (name, birthdate, convenio_id)
        VALUES ($1, $2, $3)
-       RETURNING id, name, birthdate, convenio_id, created_at`,
+    RETURNING id, name, birthdate, convenio_id, created_at`,
       [name, birthdate || null, convenio_id || null]
     )
     res.status(201).json(rows[0])
@@ -170,8 +187,7 @@ router.post('/', async (req, res) => {
   }
 })
 
-// RF02 - EDITAR PACIENTE
-// PATCH /patients/:id { name?, birthdate?, convenio_id? }
+// EDITAR PACIENTE
 router.patch('/:id', async (req, res) => {
   const id = Number(req.params.id)
   const { name, birthdate, convenio_id } = req.body || {}
@@ -190,7 +206,7 @@ router.patch('/:id', async (req, res) => {
   try {
     const { rows } = await query(
       `UPDATE patients SET ${fields.join(', ')} WHERE id=$${i}
-       RETURNING id, name, birthdate, convenio_id, created_at`,
+    RETURNING id, name, birthdate, convenio_id, created_at`,
       params
     )
     if (!rows.length) return res.status(404).json({ error: 'Paciente não encontrado' })
@@ -201,7 +217,7 @@ router.patch('/:id', async (req, res) => {
   }
 })
 
-// RF03 - ASSOCIAR EXAME AO PACIENTE
+// ASSOCIAR EXAME AO PACIENTE
 // POST /patients/:id/exams { type, urgency }
 router.post('/:id/exams', async (req, res) => {
   const id = Number(req.params.id)
@@ -221,14 +237,15 @@ router.post('/:id/exams', async (req, res) => {
     const exam = (await client.query(
       `INSERT INTO exams (patient_id, type, priority, created_by)
        VALUES ($1,$2,$3,$4)
-       RETURNING id, patient_id, type, priority, created_at`,
+    RETURNING id, patient_id, type, priority, created_at`,
       [id, type, !!urgency, req.user?.id || null]
     )).rows[0]
 
+    // Passo inicial agora fica PENDENTE (compatível com o CHECK do schema)
     const step = (await client.query(
       `INSERT INTO exam_steps (exam_id, step, status, responsible_id)
-       VALUES ($1,'RECEPCAO','EM_ANDAMENTO',$2)
-       RETURNING id, exam_id, step, status, started_at`,
+       VALUES ($1,'RECEPCAO','PENDENTE',$2)
+    RETURNING id, exam_id, step, status, started_at`,
       [exam.id, req.user?.id || null]
     )).rows[0]
 
