@@ -3,6 +3,23 @@ import { query } from '../db.js';
 
 const router = Router();
 
+// Lista responsáveis (funcionários / patologistas ativos)
+router.get('/responsaveis', async (_req, res) => {
+  try {
+    const r = await query(
+      `SELECT id, name, role
+         FROM users
+        WHERE enabled = TRUE
+          AND role IN ('FUNCIONARIO','PATOLOGISTA')
+        ORDER BY name`
+    );
+    res.json(r.rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Erro ao listar responsáveis' });
+  }
+});
+
 /**
  * BOARD: PENDENTE | EM_PREPARO_INICIAL | CONCLUIDO
  */
@@ -67,7 +84,6 @@ router.get('/board', async (_req, res) => {
 
 /**
  * (Opcional) Filtro simples: /exams?patient_id=123
- * Útil como fallback do modal caso /patients/:id/exams não exista.
  */
 router.get('/', async (req, res) => {
   try {
@@ -92,19 +108,20 @@ router.get('/', async (req, res) => {
 
 /**
  * INICIAR PREPARO
- * - Permite apenas se último status for PENDENTE (ou inexistente => PENDENTE)
- * - Atualiza prep_laminas / prep_responsavel / prep_started_at em exams
- * - Insere passo: step='PREPARO_INICIAL', status='EM_PREPARO_INICIAL'
+ * - exige último status = PENDENTE
+ * - recebe { laminas, responsavel_id }
+ * - atualiza exams (prep_laminas, prep_responsavel, prep_started_at)
+ * - insere exam_steps com responsible_id
  */
 router.post('/:id/start-prep', async (req, res) => {
   const examId = Number(req.params.id);
-  const { laminas, responsavel } = req.body || {};
+  const { laminas, responsavel_id } = req.body || {};
 
   if (!examId) return res.status(400).json({ error: 'Exame inválido.' });
   if (!laminas || Number(laminas) <= 0)
     return res.status(400).json({ error: 'Informe a quantidade de lâminas (> 0).' });
-  if (!responsavel || !String(responsavel).trim())
-    return res.status(400).json({ error: 'Informe o responsável.' });
+  if (!responsavel_id || isNaN(Number(responsavel_id)))
+    return res.status(400).json({ error: 'Selecione o responsável.' });
 
   try {
     await query('BEGIN');
@@ -116,7 +133,7 @@ router.post('/:id/start-prep', async (req, res) => {
       return res.status(404).json({ error: 'Exame não encontrado.' });
     }
 
-    // Último status (se não houver, consideramos PENDENTE)
+    // Último status (se não houver, considere PENDENTE)
     const last = await query(
       `SELECT status
          FROM exam_steps
@@ -131,21 +148,36 @@ router.post('/:id/start-prep', async (req, res) => {
       return res.status(409).json({ error: `Exame não está pendente (status atual: ${lastStatus}).` });
     }
 
-    // Atualiza dados do preparo no exame (sem updated_at)
+    // valida responsável
+    const u = await query(
+      `SELECT id, name
+         FROM users
+        WHERE id = $1
+          AND enabled = TRUE
+          AND role IN ('FUNCIONARIO','PATOLOGISTA')`,
+      [responsavel_id]
+    );
+    if (!u.rowCount) {
+      await query('ROLLBACK');
+      return res.status(400).json({ error: 'Responsável inválido.' });
+    }
+    const respName = u.rows[0].name;
+
+    // Atualiza dados no exame
     await query(
       `UPDATE exams
           SET prep_laminas = $1,
               prep_responsavel = $2,
               prep_started_at = NOW()
         WHERE id = $3`,
-      [Number(laminas), String(responsavel).trim(), examId]
+      [Number(laminas), respName, examId]
     );
 
-    // Registra o passo de PREPARO_INICIAL (com coluna step)
+    // Registra passo com responsible_id
     await query(
-      `INSERT INTO exam_steps (exam_id, step, status, started_at)
-       VALUES ($1, 'PREPARO_INICIAL', 'EM_PREPARO_INICIAL', NOW())`,
-      [examId]
+      `INSERT INTO exam_steps (exam_id, step, status, responsible_id, started_at)
+       VALUES ($1, 'PREPARO_INICIAL', 'EM_PREPARO_INICIAL', $2, NOW())`,
+      [examId, Number(responsavel_id)]
     );
 
     await query('COMMIT');
@@ -154,7 +186,8 @@ router.post('/:id/start-prep', async (req, res) => {
       id: examId,
       status: 'EM_PREPARO_INICIAL',
       prep_laminas: Number(laminas),
-      prep_responsavel: String(responsavel).trim()
+      prep_responsavel: respName,
+      responsavel_id: Number(responsavel_id)
     });
   } catch (err) {
     console.error('start-prep error:', err);

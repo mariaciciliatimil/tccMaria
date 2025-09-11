@@ -25,14 +25,20 @@ export default function Pacientes() {
   const [prepExams, setPrepExams] = useState([]) // exames do paciente
   const [prepExamId, setPrepExamId] = useState('')
   const [prepLaminas, setPrepLaminas] = useState('')
-  const [prepResp, setPrepResp] = useState(localStorage.getItem('userName') || '')
+
+  // responsáveis (novos)
+  const [staff, setStaff] = useState([])            // lista de usuários aptos
+  const [prepRespId, setPrepRespId] = useState('')  // id selecionado
 
   // (mantive se você ainda usa noutros lugares)
   const [examOpenId] = useState(null)
   const [examType] = useState(EXAM_TYPES[0].value)
   const [examUrg] = useState(false)
 
-  const headers = useMemo(() => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` }), [])
+  const headers = useMemo(
+    () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` }),
+    []
+  )
 
   async function load() {
     setLoading(true)
@@ -89,8 +95,11 @@ export default function Pacientes() {
     setPrepError('')
     setPrepExams([])
     setPrepExamId('')
+    setPrepLaminas('')
+    setPrepRespId('')
+
     try {
-      // tenta rota /patients/:id/exams; se não existir, tenta /exams?patient_id=...
+      // 1) exam do paciente
       let res = await fetch(`${API}/patients/${patient.id}/exams`, { headers: { Authorization: `Bearer ${token()}` } })
       if (res.status === 404) {
         res = await fetch(`${API}/exams?patient_id=${patient.id}`, { headers: { Authorization: `Bearer ${token()}` } })
@@ -100,6 +109,12 @@ export default function Pacientes() {
       const list = Array.isArray(data) ? data : (data.items || [])
       setPrepExams(list)
       setPrepExamId(list?.[0]?.id || '')
+
+      // 2) responsáveis (carrega sempre para manter atualizado)
+      const rStaff = await fetch(`${API}/exams/responsaveis`, { headers })
+      const sData = await rStaff.json()
+      if (!rStaff.ok) throw new Error(sData?.error || 'Falha ao carregar responsáveis')
+      setStaff(sData)
     } catch (e) {
       setPrepError(e.message)
     } finally {
@@ -114,7 +129,7 @@ export default function Pacientes() {
     setPrepExams([])
     setPrepExamId('')
     setPrepLaminas('')
-    setPrepResp(localStorage.getItem('userName') || '')
+    setPrepRespId('')
   }
 
   const savePrep = async () => {
@@ -122,19 +137,19 @@ export default function Pacientes() {
       setPrepError('')
       if (!prepExamId) return setPrepError('Selecione um exame.')
       if (!prepLaminas || Number(prepLaminas) <= 0) return setPrepError('Informe a quantidade de lâminas (>0).')
-      if (!prepResp.trim()) return setPrepError('Informe o responsável.')
+      if (!prepRespId) return setPrepError('Selecione o responsável.')
 
       const res = await fetch(`${API}/exams/${prepExamId}/start-prep`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ laminas: Number(prepLaminas), responsavel: prepResp })
+        body: JSON.stringify({ laminas: Number(prepLaminas), responsavel_id: Number(prepRespId) })
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Falha ao iniciar preparo')
 
       setMsg(`Preparo iniciado no exame #${data.id} (${data.status}).`)
       closePrep()
-      load() // só para refletir caso mostre algo derivado
+      load()
     } catch (e) {
       setPrepError(e.message)
     }
@@ -203,7 +218,7 @@ export default function Pacientes() {
                   <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
                     <button onClick={()=>startEdit(p)} style={{padding:'6px 10px', borderRadius:8, border:'1px solid #ccc', background:'#fff'}}>Editar</button>
 
-                    {/* Substitui "Associar exame" por "Iniciar preparo" */}
+                    {/* Iniciar preparo */}
                     <button
                       onClick={()=>openPrep(p)}
                       style={{padding:'6px 10px', borderRadius:8, border:'1px solid #ccc', background:'#fff'}}
@@ -229,7 +244,7 @@ export default function Pacientes() {
             </div>
 
             {prepLoading ? (
-              <div>Carregando exames…</div>
+              <div>Carregando…</div>
             ) : (
               <>
                 {prepExams.length === 0 ? (
@@ -253,9 +268,17 @@ export default function Pacientes() {
                   <label>Qtd. de lâminas</label>
                   <input type="number" min="1" value={prepLaminas} onChange={e=>setPrepLaminas(e.target.value)} style={M.input}/>
                 </div>
+
                 <div style={M.field}>
                   <label>Responsável</label>
-                  <input type="text" value={prepResp} onChange={e=>setPrepResp(e.target.value)} style={M.input}/>
+                  <select value={prepRespId} onChange={e=>setPrepRespId(e.target.value)} style={M.input}>
+                    <option value="">Selecione...</option>
+                    {staff.map(u => (
+                      <option key={u.id} value={u.id}>
+                        {u.name} {u.role ? `• ${u.role}` : ''}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {prepError && <div style={{color:'#b00020', marginTop:6}}>{prepError}</div>}
