@@ -3,6 +3,10 @@ import { query } from '../db.js';
 
 const router = Router();
 
+/* =========================
+   ROTAS ESPECÍFICAS (sem :id)
+   ========================= */
+
 // Lista responsáveis (funcionários / patologistas ativos)
 router.get('/responsaveis', async (_req, res) => {
   try {
@@ -106,14 +110,75 @@ router.get('/', async (req, res) => {
   }
 });
 
-/**
- * INICIAR PREPARO
- * - exige último status = PENDENTE
- * - recebe { laminas, responsavel_id }
- * - atualiza exams (prep_laminas, prep_responsavel, prep_started_at)
- * - insere exam_steps com responsible_id
- */
-router.post('/:id/start-prep', async (req, res) => {
+// ====== LISTA "EXAMES CONCLUÍDOS" (que AINDA NÃO estão na bandeja de HOJE)
+router.get('/concluded', async (_req, res) => {
+  try {
+    const sql = `
+      WITH last_steps AS (
+        SELECT DISTINCT ON (exam_id) exam_id, status
+        FROM exam_steps
+        ORDER BY exam_id, started_at DESC, id DESC
+      ),
+      today_tray AS (
+        SELECT exam_id
+        FROM exam_tray
+        WHERE created_at::date = CURRENT_DATE
+      )
+      SELECT
+        e.id,
+        e.type,
+        e.priority,
+        p.name AS patient_name,
+        e.created_at
+      FROM exams e
+      JOIN patients p       ON p.id = e.patient_id
+      LEFT JOIN last_steps s ON s.exam_id = e.id
+      LEFT JOIN today_tray t ON t.exam_id = e.id
+      WHERE COALESCE(s.status, 'PENDENTE') = 'CONCLUIDO'
+        AND t.exam_id IS NULL
+      ORDER BY e.created_at DESC
+      LIMIT 50
+    `;
+    const r = await query(sql);
+    res.json(r.rows);
+  } catch (e) {
+    console.error('GET /exams/concluded', e);
+    res.status(500).json({ error: 'Erro ao listar exames concluídos.' });
+  }
+});
+
+// ====== LISTA "BANDEJA DO DIA"
+router.get('/tray-today', async (_req, res) => {
+  try {
+    const sql = `
+      SELECT
+        t.id            AS tray_id,
+        e.id            AS exam_id,
+        e.type,
+        p.name          AS patient_name,
+        t.priority,
+        t.note,
+        t.created_at
+      FROM exam_tray t
+      JOIN exams e    ON e.id = t.exam_id
+      JOIN patients p ON p.id = e.patient_id
+      WHERE t.created_at::date = CURRENT_DATE
+      ORDER BY t.priority ASC, t.created_at ASC
+    `;
+    const r = await query(sql);
+    res.json(r.rows);
+  } catch (e) {
+    console.error('GET /exams/tray-today', e);
+    res.status(500).json({ error: 'Erro ao listar a bandeja do dia.' });
+  }
+});
+
+/* =========================
+   ROTAS COM :id (numérico)
+   ========================= */
+
+// INICIAR PREPARO
+router.post('/:id(\\d+)/start-prep', async (req, res) => {
   const examId = Number(req.params.id);
   const { laminas, responsavel_id } = req.body || {};
 
@@ -195,11 +260,9 @@ router.post('/:id/start-prep', async (req, res) => {
     res.status(500).json({ error: 'Erro ao iniciar preparo do exame' });
   }
 });
-// ============================
+
 // DETALHES DO EXAME (para o modal)
-// GET /exams/:id
-// ============================
-router.get('/:id', async (req, res) => {
+router.get('/:id(\\d+)', async (req, res) => {
   const examId = Number(req.params.id);
   if (!examId) return res.status(400).json({ error: 'ID inválido.' });
 
@@ -236,18 +299,12 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// ============================
 // CONCLUIR EXAME (botão do modal)
-// POST /exams/:id/conclude
-// - Só ADMIN e FUNCIONARIO podem concluir
-// - Insere passo em exam_steps com status CONCLUIDO
-// ============================
-router.post('/:id/conclude', async (req, res) => {
+router.post('/:id(\\d+)/conclude', async (req, res) => {
   const examId = Number(req.params.id);
   if (!examId) return res.status(400).json({ error: 'ID inválido.' });
 
   try {
-    // req.user chega do middleware global do index.js
     const role = req.user?.role;
     if (!['ADMIN', 'FUNCIONARIO'].includes(role)) {
       return res.status(403).json({ error: 'Sem permissão para concluir.' });
@@ -255,14 +312,12 @@ router.post('/:id/conclude', async (req, res) => {
 
     await query('BEGIN');
 
-    // Confirma exame
     const ex = await query('SELECT id FROM exams WHERE id = $1', [examId]);
     if (ex.rowCount === 0) {
       await query('ROLLBACK');
       return res.status(404).json({ error: 'Exame não encontrado.' });
     }
 
-    // Status atual (default PENDENTE)
     const last = await query(
       `SELECT status
          FROM exam_steps
@@ -277,7 +332,6 @@ router.post('/:id/conclude', async (req, res) => {
       return res.status(409).json({ error: 'Exame já está CONCLUÍDO.' });
     }
 
-    // Registra passo final
     await query(
       `INSERT INTO exam_steps (exam_id, step, status, responsible_id, started_at)
        VALUES ($1, 'FINALIZACAO', 'CONCLUIDO', $2, NOW())`,
@@ -293,5 +347,65 @@ router.post('/:id/conclude', async (req, res) => {
   }
 });
 
+// ADICIONA UM EXAME CONCLUÍDO NA "BANDEJA DO DIA"
+router.post('/:id(\\d+)/add-to-tray', async (req, res) => {
+  const examId = Number(req.params.id);
+  const { priority = 3, note = null } = req.body || {};
+
+  if (!examId) return res.status(400).json({ error: 'Exame inválido.' });
+
+  try {
+    const role = req.user?.role;
+    if (!['ADMIN','FUNCIONARIO'].includes(role))
+      return res.status(403).json({ error: 'Sem permissão para adicionar na bandeja.' });
+
+    await query('BEGIN');
+
+    const ex = await query('SELECT id FROM exams WHERE id = $1', [examId]);
+    if (ex.rowCount === 0) {
+      await query('ROLLBACK');
+      return res.status(404).json({ error: 'Exame não encontrado.' });
+    }
+
+    const last = await query(
+      `SELECT status
+         FROM exam_steps
+        WHERE exam_id = $1
+        ORDER BY started_at DESC, id DESC
+        LIMIT 1`,
+      [examId]
+    );
+    const statusAtual = last.rowCount ? last.rows[0].status : 'PENDENTE';
+    if (statusAtual !== 'CONCLUIDO') {
+      await query('ROLLBACK');
+      return res.status(409).json({ error: `Exame não está CONCLUÍDO (status: ${statusAtual}).` });
+    }
+
+    const already = await query(
+      `SELECT 1 FROM exam_tray
+        WHERE exam_id = $1
+          AND created_at::date = CURRENT_DATE`,
+      [examId]
+    );
+    if (already.rowCount) {
+      await query('ROLLBACK');
+      return res.status(409).json({ error: 'Este exame já está na bandeja de hoje.' });
+    }
+
+    const ins = await query(
+      `INSERT INTO exam_tray (exam_id, priority, note, added_by)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, exam_id, priority, note, created_at`,
+      [examId, Number(priority), note, req.user?.id || null]
+    );
+
+    await query('COMMIT');
+    res.status(201).json(ins.rows[0]);
+  } catch (e) {
+    console.error('POST /exams/:id/add-to-tray', e);
+    try { await query('ROLLBACK'); } catch {}
+    res.status(500).json({ error: 'Erro ao adicionar exame na bandeja do dia.' });
+  }
+});
 
 export default router;

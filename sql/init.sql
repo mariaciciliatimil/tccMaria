@@ -60,3 +60,17 @@ CREATE TABLE IF NOT EXISTS exam_steps (
 );
 
 CREATE INDEX IF NOT EXISTS idx_steps_exam ON exam_steps(exam_id);
+
+-- MÓDULO IV – BANDEJA DO DIA (simples e sem migrations)
+CREATE TABLE IF NOT EXISTS exam_tray (
+  id SERIAL PRIMARY KEY,
+  exam_id INT NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+  priority SMALLINT NOT NULL DEFAULT 3, -- 1=alta, 2=média, 3=normal
+  note TEXT,
+  added_by INT REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Evita duplicar o mesmo exame na bandeja do mesmo dia
+CREATE UNIQUE INDEX IF NOT EXISTS uq_exam_tray_exam_day
+ON exam_tray (exam_id, (created_at::date));
