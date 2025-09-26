@@ -147,7 +147,7 @@ router.get('/concluded', async (_req, res) => {
   }
 });
 
-// ====== LISTA "BANDEJA DO DIA"
+// ====== LISTA "BANDEJA DO DIA" (prioridade do EXAME)
 router.get('/tray-today', async (_req, res) => {
   try {
     const sql = `
@@ -155,21 +155,75 @@ router.get('/tray-today', async (_req, res) => {
         t.id            AS tray_id,
         e.id            AS exam_id,
         e.type,
+        e.priority      AS priority,   -- prioridade do EXAME
         p.name          AS patient_name,
-        t.priority,
         t.note,
         t.created_at
       FROM exam_tray t
       JOIN exams e    ON e.id = t.exam_id
       JOIN patients p ON p.id = e.patient_id
       WHERE t.created_at::date = CURRENT_DATE
-      ORDER BY t.priority ASC, t.created_at ASC
+      ORDER BY e.priority ASC, t.created_at ASC
     `;
     const r = await query(sql);
     res.json(r.rows);
   } catch (e) {
     console.error('GET /exams/tray-today', e);
     res.status(500).json({ error: 'Erro ao listar a bandeja do dia.' });
+  }
+});
+
+/* =========
+   BANDEJA: editar / excluir (trayId numérico)
+   ========= */
+
+// EDITAR item da bandeja (AGORA só nota/observação)
+router.put('/tray/:trayId(\\d+)', async (req, res) => {
+  const trayId = Number(req.params.trayId);
+  const { note } = req.body || {};
+
+  if (!trayId) return res.status(400).json({ error: 'ID inválido.' });
+
+  // Só ADMIN / FUNCIONARIO podem editar
+  const role = req.user?.role;
+  if (!['ADMIN','FUNCIONARIO'].includes(role))
+    return res.status(403).json({ error: 'Sem permissão para editar a bandeja.' });
+
+  try {
+    const ex = await query('SELECT id FROM exam_tray WHERE id = $1', [trayId]);
+    if (ex.rowCount === 0) return res.status(404).json({ error: 'Item da bandeja não encontrado.' });
+
+    const { rows } = await query(
+      `UPDATE exam_tray
+         SET note = COALESCE($1, note)
+       WHERE id = $2
+       RETURNING id, exam_id, note, created_at`,
+      [note ?? null, trayId]
+    );
+    res.json(rows[0]);
+  } catch (e) {
+    console.error('PUT /exams/tray/:trayId', e);
+    res.status(500).json({ error: 'Erro ao atualizar item da bandeja.' });
+  }
+});
+
+// EXCLUIR item da bandeja
+router.delete('/tray/:trayId(\\d+)', async (req, res) => {
+  const trayId = Number(req.params.trayId);
+  if (!trayId) return res.status(400).json({ error: 'ID inválido.' });
+
+  // Só ADMIN / FUNCIONARIO podem excluir
+  const role = req.user?.role;
+  if (!['ADMIN','FUNCIONARIO'].includes(role))
+    return res.status(403).json({ error: 'Sem permissão para excluir da bandeja.' });
+
+  try {
+    const del = await query('DELETE FROM exam_tray WHERE id = $1 RETURNING id', [trayId]);
+    if (del.rowCount === 0) return res.status(404).json({ error: 'Item da bandeja não encontrado.' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('DELETE /exams/tray/:trayId', e);
+    res.status(500).json({ error: 'Erro ao remover item da bandeja.' });
   }
 });
 
@@ -261,6 +315,47 @@ router.post('/:id(\\d+)/start-prep', async (req, res) => {
   }
 });
 
+// ATUALIZAR PRIORIDADE DO EXAME (só quando CONCLUIDO)
+router.patch('/:id(\\d+)/priority', async (req, res) => {
+  const examId = Number(req.params.id);
+  const { priority } = req.body || {};
+  if (!examId) return res.status(400).json({ error: 'ID inválido.' });
+  if (![1, 2, 3].includes(Number(priority))) {
+    return res.status(400).json({ error: 'Prioridade inválida (1=Alta, 2=Média, 3=Normal).' });
+  }
+
+  // Só ADMIN/FUNCIONARIO podem mudar
+  const role = req.user?.role;
+  if (!['ADMIN', 'FUNCIONARIO'].includes(role)) {
+    return res.status(403).json({ error: 'Sem permissão para alterar prioridade.' });
+  }
+
+  try {
+    const last = await query(
+      `SELECT status FROM exam_steps
+        WHERE exam_id = $1
+        ORDER BY started_at DESC, id DESC
+        LIMIT 1`,
+      [examId]
+    );
+    const st = last.rowCount ? last.rows[0].status : 'PENDENTE';
+    if (st !== 'CONCLUIDO') {
+      return res.status(409).json({ error: `Exame não está CONCLUÍDO (status: ${st}).` });
+    }
+
+    const upd = await query(
+      `UPDATE exams SET priority = $1 WHERE id = $2 RETURNING id, priority`,
+      [Number(priority), examId]
+    );
+    if (!upd.rowCount) return res.status(404).json({ error: 'Exame não encontrado.' });
+
+    res.json(upd.rows[0]);
+  } catch (e) {
+    console.error('PATCH /exams/:id/priority', e);
+    res.status(500).json({ error: 'Erro ao atualizar prioridade.' });
+  }
+});
+
 // DETALHES DO EXAME (para o modal)
 router.get('/:id(\\d+)', async (req, res) => {
   const examId = Number(req.params.id);
@@ -348,9 +443,10 @@ router.post('/:id(\\d+)/conclude', async (req, res) => {
 });
 
 // ADICIONA UM EXAME CONCLUÍDO NA "BANDEJA DO DIA"
+// (não define prioridade aqui; usamos a prioridade do EXAME)
 router.post('/:id(\\d+)/add-to-tray', async (req, res) => {
   const examId = Number(req.params.id);
-  const { priority = 3, note = null } = req.body || {};
+  const { note = null } = req.body || {};
 
   if (!examId) return res.status(400).json({ error: 'Exame inválido.' });
 
@@ -393,10 +489,10 @@ router.post('/:id(\\d+)/add-to-tray', async (req, res) => {
     }
 
     const ins = await query(
-      `INSERT INTO exam_tray (exam_id, priority, note, added_by)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, exam_id, priority, note, created_at`,
-      [examId, Number(priority), note, req.user?.id || null]
+      `INSERT INTO exam_tray (exam_id, note, added_by)
+       VALUES ($1, $2, $3)
+       RETURNING id, exam_id, note, created_at`,
+      [examId, note, req.user?.id || null]
     );
 
     await query('COMMIT');
