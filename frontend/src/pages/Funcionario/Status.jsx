@@ -2,6 +2,30 @@ import React, { useEffect, useMemo, useState } from 'react'
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 const token = () => localStorage.getItem('token') || ''
 
+// Mapa de prioridade: rótulos e cores claras
+const PR = {
+  1: { label: 'Emergência',     color: '#ffe0e0' }, // vermelho claro
+  2: { label: 'Muito urgente',  color: '#ffe9d6' }, // laranja claro
+  3: { label: 'Urgente',        color: '#fff6cc' }, // amarelo claro
+  4: { label: 'Rotina',         color: '#e6f7e6' }, // verde claro
+}
+
+function PriorityTag({ level = 4 }) {
+  const meta = PR[level] || PR[4]
+  return (
+    <span style={{
+      background: meta.color,
+      padding: '4px 8px',
+      borderRadius: 999,
+      fontSize: 12,
+      border: '1px solid #dfe5ea',
+      fontWeight: 700
+    }}>
+      {meta.label}
+    </span>
+  )
+}
+
 export default function Status() {
   const [counts, setCounts] = useState({ PENDENTE: 0, EM_PREPARO_INICIAL: 0, CONCLUIDO: 0 })
   const [columns, setColumns] = useState({ PENDENTE: [], EM_PREPARO_INICIAL: [], CONCLUIDO: [] })
@@ -9,7 +33,7 @@ export default function Status() {
   const [error, setError] = useState('')
   const [sel, setSel] = useState(null)           // exame selecionado (modal)
   const [savingPrio, setSavingPrio] = useState(false)
-  const [prioDraft, setPrioDraft] = useState(3)
+  const [prioDraft, setPrioDraft] = useState(4)  // default: Rotina
 
   const headers = useMemo(
     () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` }),
@@ -38,7 +62,7 @@ export default function Status() {
       const d = await r.json()
       if (!r.ok) throw new Error(d?.error || 'Falha ao buscar detalhes')
       setSel(d)
-      setPrioDraft(Number(d.priority ?? 3))
+      setPrioDraft(Number(d.priority ?? 4))
     } catch (e) {
       alert(e.message)
     }
@@ -66,19 +90,16 @@ export default function Status() {
     }
   }
 
-  // >>> NOVO: concluir exame (avançar para CONCLUÍDO)
+  // Concluir exame
   async function concludeExam() {
     if (!sel) return
     if (!confirm('Concluir este exame?')) return
     try {
-      const r = await fetch(`${API}/exams/${sel.id}/conclude`, {
-        method: 'POST',
-        headers
-      })
+      const r = await fetch(`${API}/exams/${sel.id}/conclude`, { method: 'POST', headers })
       const d = await r.json()
       if (!r.ok) throw new Error(d?.error || 'Falha ao concluir exame')
       await loadBoard()
-      setSel(null) // fecha modal
+      setSel(null)
     } catch (e) {
       alert(e.message)
     }
@@ -92,7 +113,15 @@ export default function Status() {
     col: { background: '#e9ecef', borderRadius: 14, padding: 16, minHeight: 420 },
     colHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
     badge: { background: '#0ea5e9', color: '#fff', fontWeight: 800, padding: '4px 10px', borderRadius: 999, fontSize: 12 },
-    card: { background: '#fff', borderRadius: 10, padding: '12px 14px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', marginBottom: 10, cursor: 'pointer' },
+    card: (priority) => ({
+      background: '#fff',
+      borderRadius: 10,
+      padding: '12px 14px',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+      marginBottom: 10,
+      cursor: 'pointer',
+      borderLeft: `6px solid ${PR[priority]?.color || PR[4].color}`,   // faixa lateral suave
+    }),
     sub: { fontSize: 13, color: '#374151' },
     small: { fontSize: 12, color: '#6b7280' },
     btn: { padding: '8px 12px', borderRadius: 10, border: '1px solid #d0d5dd', background: '#fff', cursor: 'pointer', fontWeight: 700 }
@@ -108,11 +137,13 @@ export default function Status() {
         <div style={{ color: '#6b7280' }}>Sem itens</div>
       ) : (
         items.map((e) => (
-          <div key={e.id} style={styles.card} onClick={() => openExam(e.id)}>
-            <div style={{ fontWeight: 800 }}>{e.patient_name || 'Paciente'} • #{e.id}</div>
+          <div key={e.id} style={styles.card(e.priority)} onClick={() => openExam(e.id)}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+              <div style={{ fontWeight: 800 }}>{e.patient_name || 'Paciente'} • #{e.id}</div>
+              <PriorityTag level={e.priority} />
+            </div>
             <div style={styles.sub}>
               Exame: {String(e.type || '').replaceAll('_', ' ')}
-              {e.priority === 1 ? ' • Prioritário' : ''}
             </div>
             <div style={styles.small}>Criado em: {new Date(e.created_at).toLocaleString()}</div>
           </div>
@@ -147,7 +178,7 @@ export default function Status() {
         <Coluna titulo="CONCLUÍDO" items={columns.CONCLUIDO || []} />
       </div>
 
-      {/* Modal simples */}
+      {/* Modal */}
       {sel && (
         <div style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)',
@@ -163,7 +194,10 @@ export default function Status() {
               <tbody>
                 <tr><td><b>Paciente</b></td><td>{sel.patient_name}</td></tr>
                 <tr><td><b>Exame</b></td><td>#{sel.id} — {String(sel.type).replaceAll('_',' ')}</td></tr>
-                <tr><td><b>Prioridade</b></td><td>{{1:'Alta',2:'Média',3:'Normal'}[sel.priority] || 'Normal'}</td></tr>
+                <tr>
+                  <td><b>Prioridade</b></td>
+                  <td><PriorityTag level={sel.priority} /></td>
+                </tr>
                 <tr><td><b>Status atual</b></td><td>{sel.status}</td></tr>
                 <tr><td><b>Criado em</b></td><td>{new Date(sel.created_at).toLocaleString()}</td></tr>
                 <tr><td><b>Resp. preparo</b></td><td>{sel.prep_responsavel || '—'}</td></tr>
@@ -172,7 +206,7 @@ export default function Status() {
               </tbody>
             </table>
 
-            {/* Ações para avançar etapa (quando ainda não está concluído) */}
+            {/* Ações para avançar etapa */}
             {sel.status !== 'CONCLUIDO' && (
               <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
                 <button style={styles.btn} onClick={concludeExam}>
@@ -181,15 +215,16 @@ export default function Status() {
               </div>
             )}
 
-            {/* Alterar prioridade somente quando já está concluído */}
+            {/* Alterar prioridade (seu fluxo atual deixava no concluído — mantive) */}
             {sel.status === 'CONCLUIDO' && (
               <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #eee' }}>
                 <div style={{ fontWeight: 700, marginBottom: 6 }}>Alterar prioridade do exame</div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <select value={prioDraft} onChange={e => setPrioDraft(Number(e.target.value))}>
-                    <option value={1}>Alta</option>
-                    <option value={2}>Média</option>
-                    <option value={3}>Normal</option>
+                    <option value={1}>Emergência</option>
+                    <option value={2}>Muito urgente</option>
+                    <option value={3}>Urgente</option>
+                    <option value={4}>Rotina</option>
                   </select>
                   <button className="btn" style={styles.btn} disabled={savingPrio} onClick={savePriority}>
                     {savingPrio ? 'Salvando...' : 'Salvar prioridade'}

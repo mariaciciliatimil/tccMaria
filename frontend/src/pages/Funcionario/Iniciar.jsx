@@ -6,6 +6,14 @@ const EXAM_TYPES = [
   { value: 'ANATOMO_PATOLOGICO', label: 'Anátomo Patológico' }
 ]
 
+// 1..4 com cores claras
+const PRIORITIES = [
+  { value: 1, label: 'Emergência', color: '#ffe0e0' },    // vermelho claro
+  { value: 2, label: 'Muito urgente', color: '#ffe9d6' }, // laranja claro
+  { value: 3, label: 'Urgente', color: '#fff6cc' },       // amarelo claro
+  { value: 4, label: 'Rotina', color: '#e6f7e6' }         // verde claro
+]
+
 export default function Iniciar() {
   const [convs, setConvs] = useState([]),
         [query, setQuery] = useState(''),
@@ -16,8 +24,8 @@ export default function Iniciar() {
         [name, setName] = useState(''),
         [birthdate, setBirthdate] = useState(''),
         [convenioId, setConvenioId] = useState('')
-  const [urgency, setUrgency] = useState(false),
-        [examType, setExamType] = useState(EXAM_TYPES[0].value)
+  const [examType, setExamType] = useState(EXAM_TYPES[0].value)
+  const [priority, setPriority] = useState(4) // 4 = Rotina (default)
   const [notFound, setNotFound] = useState(false)
 
   // convenios
@@ -65,8 +73,16 @@ export default function Iniciar() {
     setMsg('')
     try {
       const payload = {
-        patient: { id: patientId, name, birthdate: birthdate || null, convenio_id: convenioId || null },
-        exam: { type: examType, urgency }
+        patient: {
+          id: patientId,
+          name,
+          birthdate: birthdate || null,
+          convenio_id: convenioId || null
+        },
+        exam: {
+          type: examType,
+          priority // <-- envia nível (1..4)
+        }
       }
       const res = await fetch(`${API}/patients/initiate`, {
         method: 'POST',
@@ -76,7 +92,7 @@ export default function Iniciar() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Falha ao iniciar paciente')
       setMsg(`Exame #${data.exam.id} criado para ${data.patient.name}`)
-      setUrgency(false)
+      setPriority(4)
       setExamType(EXAM_TYPES[0].value)
       setSug([])
       setNotFound(false)
@@ -179,9 +195,38 @@ export default function Iniciar() {
                 {EXAM_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 26 }}>
-              <input id="urg" type="checkbox" checked={urgency} onChange={e => setUrgency(e.target.checked)} />
-              <label htmlFor="urg">Urgência</label>
+
+            {/* PRIORIDADE - substitui o checkbox de urgência */}
+            <div>
+              <label style={label}>Prioridade</label>
+              <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+                {PRIORITIES.map(p => (
+                  <label
+                    key={p.value}
+                    className={p.value === priority ? 'prio active' : 'prio'}
+                    style={{
+                      display:'flex', alignItems:'center', gap:8,
+                      padding:'8px 10px', border:'1px solid #dfe5ea',
+                      borderRadius:8, cursor:'pointer',
+                      background: p.value === priority ? '#f8fafc' : '#fff'
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="priority"
+                      value={p.value}
+                      checked={priority === p.value}
+                      onChange={() => setPriority(p.value)}
+                      style={{ display:'none' }}
+                    />
+                    <span style={{
+                      width:18, height:18, borderRadius:'50%',
+                      border:'1px solid #cfd8dc', background: p.color
+                    }} />
+                    {p.label}
+                  </label>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -196,7 +241,7 @@ export default function Iniciar() {
             {patientId && (
               <button
                 type="button"
-                onClick={() => { setPatientId(null); setName(''); setBirthdate(''); setConvenioId(''); setMsg(''); setNotFound(false) }}
+                onClick={() => { setPatientId(null); setName(''); setBirthdate(''); setConvenioId(''); setMsg(''); setNotFound(false); setPriority(4) }}
                 style={{ padding: '10px 14px', border: '1px solid #ccc', borderRadius: 8, background: '#fff' }}
               >
                 Limpar paciente

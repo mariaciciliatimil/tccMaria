@@ -29,6 +29,9 @@ router.post('/initiate', async (req, res) => {
   if (!p.name) return res.status(400).json({ error: 'Nome do paciente é obrigatório' })
   if (!e.type) return res.status(400).json({ error: 'Tipo de exame é obrigatório' })
 
+  // prioridade numérica (1..4). Se não vier, default 4 (Rotina)
+  const level = Number(e.priority) || 4
+
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -85,7 +88,7 @@ router.post('/initiate', async (req, res) => {
       `INSERT INTO exams (patient_id, type, priority, created_by)
        VALUES ($1,$2,$3,$4)
     RETURNING id, patient_id, type, priority, created_at`,
-      [patient.id, e.type, !!e.urgency, req.user?.id || null]
+      [patient.id, e.type, level, req.user?.id || null]
     )).rows[0]
 
     // Passo inicial fica PENDENTE (compatível com o CHECK do schema)
@@ -218,11 +221,13 @@ router.patch('/:id', async (req, res) => {
 })
 
 // ASSOCIAR EXAME AO PACIENTE
-// POST /patients/:id/exams { type, urgency }
+// POST /patients/:id/exams { type, priority }
 router.post('/:id/exams', async (req, res) => {
   const id = Number(req.params.id)
-  const { type, urgency } = req.body || {}
+  const { type, priority } = req.body || {}
   if (!type) return res.status(400).json({ error: 'Tipo de exame é obrigatório' })
+
+  const level = Number(priority) || 4
 
   const client = await pool.connect()
   try {
@@ -238,7 +243,7 @@ router.post('/:id/exams', async (req, res) => {
       `INSERT INTO exams (patient_id, type, priority, created_by)
        VALUES ($1,$2,$3,$4)
     RETURNING id, patient_id, type, priority, created_at`,
-      [id, type, !!urgency, req.user?.id || null]
+      [id, type, level, req.user?.id || null]
     )).rows[0]
 
     // Passo inicial agora fica PENDENTE (compatível com o CHECK do schema)

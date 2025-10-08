@@ -3,6 +3,30 @@ import { useEffect, useMemo, useState } from "react";
 const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
 const token = () => localStorage.getItem("token") || "";
 
+// Mapa de prioridades (cores claras)
+const PR = {
+  1: { label: "Emergência",    color: "#ffe0e0" }, // vermelho claro
+  2: { label: "Muito urgente", color: "#ffe9d6" }, // laranja claro
+  3: { label: "Urgente",       color: "#fff6cc" }, // amarelo claro
+  4: { label: "Rotina",        color: "#e6f7e6" }, // verde claro
+};
+
+function PriorityTag({ level = 4 }) {
+  const p = PR[level] || PR[4];
+  return (
+    <span style={{
+      background: p.color,
+      padding: "4px 8px",
+      borderRadius: 999,
+      fontSize: 12,
+      border: "1px solid #dfe5ea",
+      fontWeight: 700
+    }}>
+      {p.label}
+    </span>
+  );
+}
+
 export default function Bandejas() {
   const headers = useMemo(
     () => ({ "Content-Type": "application/json", Authorization: `Bearer ${token()}` }),
@@ -84,7 +108,15 @@ export default function Bandejas() {
     grid: { display: "grid", gridTemplateColumns: "420px 1fr", gap: 18 },
     col: { background: "#eef1f4", borderRadius: 14, padding: 16, minHeight: 520 },
     head: { fontWeight: 900, marginBottom: 10 },
-    card: { background: "#fff", borderRadius: 10, padding: 12, boxShadow: "0 2px 8px rgba(0,0,0,0.06)", marginBottom: 10 },
+    card: (prio) => ({
+      background: "#fff",
+      borderRadius: 10,
+      padding: 12,
+      boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+      marginBottom: 10,
+      borderLeft: `6px solid ${PR[prio]?.color || PR[4].color}`, // faixa lateral pela prioridade
+    }),
+    rowTop: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
     sub: { fontSize: 13, color: "#374151" },
     small: { fontSize: 12, color: "#6b7280" },
     btn: { padding: "6px 10px", border: "1px solid #d0d5dd", borderRadius: 8, background: "#fff", cursor: "pointer", fontWeight: 700 }
@@ -103,11 +135,13 @@ export default function Bandejas() {
           {loading && <div>Carregando…</div>}
           {!loading && concluidos.length === 0 && <div style={{ opacity: .7 }}>Sem itens</div>}
           {!loading && concluidos.map(x => (
-            <div key={x.id} style={styles.card}>
-              <div style={{ fontWeight: 800 }}>{x.patient_name} • #{x.id}</div>
+            <div key={x.id} style={styles.card(x.priority)}>
+              <div style={styles.rowTop}>
+                <div style={{ fontWeight: 800 }}>{x.patient_name} • #{x.id}</div>
+                <PriorityTag level={x.priority} />
+              </div>
               <div style={styles.sub}>
-                Exame: {String(x.type || '').replaceAll('_',' ')} <br/>
-                Prioridade: {{1:'Alta',2:'Média',3:'Normal'}[x.priority] || 'Normal'}
+                Exame: {String(x.type || '').replaceAll('_',' ')}
               </div>
               <div style={styles.small}>Concluído em: {new Date(x.created_at).toLocaleString()}</div>
               <div style={{ marginTop: 8 }}>
@@ -146,11 +180,13 @@ function TrayNoteCard({ item, onSaveNote, onRemove, styles }) {
   const [note, setNote] = useState(item.note ?? "");
 
   return (
-    <div style={styles.card}>
-      <div style={{ fontWeight: 800 }}>{item.patient_name} • #{item.exam_id}</div>
+    <div style={styles.card(item.priority)}>
+      <div style={styles.rowTop}>
+        <div style={{ fontWeight: 800 }}>{item.patient_name} • #{item.exam_id}</div>
+        <PriorityTag level={item.priority} />
+      </div>
       <div style={styles.sub}>
-        Exame: {String(item.type || '').replaceAll('_',' ')} <br/>
-        Prioridade: {{1:'Alta',2:'Média',3:'Normal'}[item.priority] || 'Normal'}
+        Exame: {String(item.type || '').replaceAll('_',' ')}
       </div>
       <div style={styles.small}>Adicionado em: {new Date(item.created_at).toLocaleString()}</div>
 
