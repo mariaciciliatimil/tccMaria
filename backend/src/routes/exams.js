@@ -442,6 +442,72 @@ router.post('/:id(\\d+)/conclude', async (req, res) => {
   }
 });
 
+/* =========================
+   NOVO: ENFILEIRAR PARA PATOLOGISTA
+   ========================= */
+/**
+ * POST /exams/:id/enfileirar
+ * Envia o exame para a fila do patologista (bandeja do dia).
+ * body: { priority?: 1|2|3|4, note?: string }
+ * Roles: ADMIN, FUNCIONARIO
+ */
+router.post('/:id(\\d+)/enfileirar', async (req, res) => {
+  const examId = Number(req.params.id);
+  let { priority = null, note = null } = req.body || {};
+
+  if (!examId) return res.status(400).json({ error: 'Exame inválido.' });
+
+  // Só ADMIN / FUNCIONARIO podem enfileirar
+  const role = req.user?.role;
+  if (!['ADMIN','FUNCIONARIO'].includes(role))
+    return res.status(403).json({ error: 'Sem permissão para enfileirar.' });
+
+  try {
+    await query('BEGIN');
+
+    // Confere exame e pega prioridade atual (se necessário)
+    const e = await query('SELECT id, priority FROM exams WHERE id = $1', [examId]);
+    if (!e.rowCount) {
+      await query('ROLLBACK');
+      return res.status(404).json({ error: 'Exame não encontrado.' });
+    }
+    const examPriority = e.rows[0].priority;
+    const finalPriority = [1,2,3,4].includes(Number(priority)) ? Number(priority) : examPriority;
+
+    // Evita duplicar na bandeja do dia (índice unique ajuda, mas tratamos o retorno)
+    const ins = await query(
+      `INSERT INTO exam_tray (exam_id, priority, note, added_by, tray_status, created_at)
+       VALUES ($1, $2, $3, $4, 'NA_FILA', NOW())
+       ON CONFLICT (exam_id, (created_at::date)) DO NOTHING
+       RETURNING id, exam_id, priority, tray_status, created_at`,
+      [examId, finalPriority, note ?? null, req.user?.id || null]
+    );
+
+    if (!ins.rowCount) {
+      // Já existe para hoje: retorna o já existente
+      const r2 = await query(
+        `SELECT id, exam_id, priority, tray_status, created_at
+           FROM exam_tray
+          WHERE exam_id = $1 AND created_at::date = CURRENT_DATE
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [examId]
+      );
+      await query('COMMIT');
+      return res
+        .status(200)
+        .json({ info: 'already_in_today_tray', ...r2.rows[0] });
+    }
+
+    await query('COMMIT');
+    res.status(201).json(ins.rows[0]);
+  } catch (e) {
+    console.error('POST /exams/:id/enfileirar', e);
+    try { await query('ROLLBACK'); } catch {}
+    res.status(500).json({ error: 'Erro ao enfileirar exame.' });
+  }
+});
+
 // ADICIONA UM EXAME CONCLUÍDO NA "BANDEJA DO DIA"
 // (não define prioridade aqui; usamos a prioridade do EXAME)
 router.post('/:id(\\d+)/add-to-tray', async (req, res) => {

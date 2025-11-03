@@ -14,13 +14,14 @@ import Pacientes from "./pages/Funcionario/Pacientes.jsx";
 import Status from "./pages/Funcionario/Status.jsx";
 
 import Patologista from "./pages/Patologista.jsx";
+import QueuePatologista from "./pages/Patologista/Queue.jsx"; // ✅ NOVO
 import Protected from "./shared/Protected.jsx";
 import StatusBoard from "./components/StatusBoard.jsx";
 
 const router = createBrowserRouter([
   { path: "/", element: <Login /> },
 
-  // ADMIN: usa o componente único Admin.jsx
+  // ADMIN
   {
     path: "/admin",
     element: (
@@ -30,7 +31,7 @@ const router = createBrowserRouter([
     ),
   },
 
-  // FUNCIONÁRIO (rotas aninhadas)
+  // FUNCIONÁRIO (layout + rotas filhas)
   {
     path: "/funcionario",
     element: (
@@ -49,14 +50,18 @@ const router = createBrowserRouter([
     ],
   },
 
-  // PATOLOGISTA
+  // PATOLOGISTA (layout + rotas filhas)
   {
     path: "/patologista",
     element: (
-      <Protected roles={["PATOLOGISTA"]}>
+      <Protected roles={["PATOLOGISTA", "ADMIN"]}> {/* coloque só PATOLOGISTA se preferir */}
         <Patologista />
       </Protected>
     ),
+    children: [
+      { index: true, element: <QueuePatologista /> }, // ✅ FILA como página inicial do patologista
+      // Se quiser, no futuro: { path: "meus", element: <QueuePatologista mode="MEUS" /> },
+    ],
   },
 ]);
 

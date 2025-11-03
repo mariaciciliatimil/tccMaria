@@ -1,0 +1,29 @@
+:root{
+  --azul-claro:#94C2D9; --azul-medio:#4F95D2; --fundo:#F6F9FC;
+  --borda:#d0dce6; --white:#fff;
+  --prio1:#ffdddd; --prio2:#ffe8cc; --prio3:#fff7cc; --prio4:#e8f5e9;
+}
+.pat-page{ background:var(--fundo); min-height:100vh; padding:16px; }
+.pat-header{ display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; margin-bottom:16px; }
+.pat-tabs button{ margin-right:8px; padding:8px 12px; border:1px solid var(--borda); background:var(--white); border-radius:10px; cursor:pointer; }
+.pat-tabs .active{ background:var(--azul-claro); border-color:var(--azul-medio); }
+.pat-filters{ grid-column:1/-1; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.pat-filters .search{ min-width:260px; padding:8px 10px; border:1px solid var(--borda); border-radius:8px; }
+.pat-error{ color:#b71c1c; background:#fdecea; border:1px solid #f5c6cb; padding:8px 12px; border-radius:8px; margin-bottom:8px; }
+.pat-loading{ opacity:.7; margin-bottom:8px; }
+.pat-cards{ display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
+.pat-card{ background:var(--white); border:1px solid var(--borda); border-radius:14px; padding:12px; display:flex; flex-direction:column; gap:8px; box-shadow:0 2px 10px rgba(0,0,0,.03); }
+.pat-card.prio-1{ background:var(--prio1); } .pat-card.prio-2{ background:var(--prio2); }
+.pat-card.prio-3{ background:var(--prio3); } .pat-card.prio-4{ background:var(--prio4); }
+.pat-card-head{ display:flex; justify-content:space-between; align-items:center; }
+.badge{ border:1px solid var(--borda); padding:2px 8px; border-radius:999px; font-size:12px; background:#fff; }
+.badge.NA_FILA{ background:#eef6ff; border-color:#cfe3ff; }
+.badge.EM_ANALISE{ background:#fff3cd; border-color:#ffe49a; }
+.badge.CONCLUIDO{ background:#e6ffed; border-color:#c8f7d2; }
+.pat-card-sub{ display:flex; justify-content:space-between; color:#4a5568; font-size:14px; }
+.pat-card-note{ border:1px dashed var(--borda); border-radius:8px; padding:8px; min-height:38px; font-size:14px; background:#fff; }
+.pat-card-actions{ display:flex; gap:8px; margin-top:6px; }
+.btn{ padding:8px 12px; border-radius:10px; border:1px solid var(--borda); background:#fff; cursor:pointer; }
+.btn.primary{ background:var(--azul-claro); border-color:var(--azul-medio); }
+.btn.success{ background:#b9f6ca; border-color:#69f0ae; }
+.empty{ opacity:.7; padding:12px; }

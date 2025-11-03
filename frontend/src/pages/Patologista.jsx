@@ -1,1 +1,11 @@
-import React from 'react'; export default function Patologista(){ const u=JSON.parse(localStorage.getItem('user')||'{}'); return (<div style={{padding:24}}><h2>Painel da Patologista</h2><p>Olá, {u.name}.</p></div>) }
+import React from 'react';
+import { Outlet } from 'react-router-dom';
+import SidebarLayout from '../layouts/SidebarLayout.jsx';
+
+export default function Patologista() {
+  return (
+    <SidebarLayout>
+      <Outlet />
+    </SidebarLayout>
+  );
+}

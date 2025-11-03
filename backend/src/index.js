@@ -8,14 +8,20 @@ import authRoutes from './routes/auth.js';
 import usersRoutes from './routes/users.js';
 import examsRoutes from './routes/exams.js';
 import patientsRoutes from './routes/patients.js';
-import reportsRoutes from './routes/reports.js'; // ✅ nova rota adicionada
+import reportsRoutes from './routes/reports.js';
+import patologistaRoutes from './routes/patologista.js'; // ✅ nova rota do patologista
 
 import { authRequired, allowRoles } from './middleware/auth.js';
 
 const app = express();
 
 // === Configurações base ===
-app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || '*' }));
+app.use(
+  cors({
+    origin: process.env.CORS_ORIGIN?.split(',') || '*',
+    credentials: true, // caso use cookie httpOnly
+  })
+);
 app.use(express.json());
 
 // === Health check ===
@@ -43,13 +49,19 @@ app.use(
   allowRoles('ADMIN', 'FUNCIONARIO'),
   patientsRoutes
 );
-
-// ✅ Nova rota: relatórios (Módulo V)
 app.use(
   '/reports',
   authRequired,
   allowRoles('ADMIN', 'FUNCIONARIO', 'PATOLOGISTA'),
   reportsRoutes
+);
+
+// ✅ Nova rota: Área do Patologista (Módulo IV)
+app.use(
+  '/patologista',
+  authRequired,
+  allowRoles('ADMIN', 'PATOLOGISTA'),
+  patologistaRoutes
 );
 
 // === Tratamento 404 JSON ===
@@ -66,5 +78,5 @@ app.use((err, _req, res, _next) => {
 // === Inicialização ===
 const port = process.env.PORT || 3000;
 app.listen(port, () =>
-  console.log(`✅ API running on http://localhost:${port}`)
+  console.log(`✅ API rodando em http://localhost:${port}`)
 );
