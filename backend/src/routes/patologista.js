@@ -14,8 +14,12 @@ const router = Router();
 router.get('/fila', async (req, res) => {
   try {
     const hoje = String(req.query.hoje || '1') === '1';
-    const status = (req.query.status || 'NA_FILA').toString().toUpperCase();
+    const rawStatus = (req.query.status || 'NA_FILA').toString().toUpperCase();
     const busca = (req.query.busca || '').trim();
+
+    // garante um status válido
+    const OK = new Set(['NA_FILA','EM_ANALISE','CONCLUIDO']);
+    const status = OK.has(rawStatus) ? rawStatus : 'NA_FILA';
 
     const params = [];
     const where = [];
@@ -24,9 +28,9 @@ router.get('/fila', async (req, res) => {
     params.push(status);
     where.push(`t.tray_status = $${params.length}`);
 
-    // ✅ apenas hoje? usar coluna materializada (indexada)
+    // apenas hoje? (usa a data do created_at)
     if (hoje) {
-      where.push(`t.created_day = CURRENT_DATE`);
+      where.push(`t.created_at::date = CURRENT_DATE`);
     }
 
     // busca por paciente / tipo de exame
@@ -53,7 +57,7 @@ router.get('/fila', async (req, res) => {
       JOIN exams    e ON e.id = t.exam_id
       JOIN patients p ON p.id = e.patient_id
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-      ORDER BY t.priority ASC, t.created_day ASC, t.created_at ASC
+      ORDER BY t.priority ASC, t.created_at::date ASC, t.created_at ASC
       LIMIT 200
     `;
 

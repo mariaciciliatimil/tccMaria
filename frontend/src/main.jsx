@@ -14,9 +14,12 @@ import Pacientes from "./pages/Funcionario/Pacientes.jsx";
 import Status from "./pages/Funcionario/Status.jsx";
 
 import Patologista from "./pages/Patologista.jsx";
-import QueuePatologista from "./pages/Patologista/Queue.jsx"; // ✅ NOVO
+import QueuePatologista from "./pages/Patologista/Queue.jsx";
 import Protected from "./shared/Protected.jsx";
 import StatusBoard from "./components/StatusBoard.jsx";
+
+// ✅ NOVO: página de impressão de etiquetas
+import PrintSlides from "./pages/PrintSlides.jsx";
 
 const router = createBrowserRouter([
   { path: "/", element: <Login /> },
@@ -54,14 +57,25 @@ const router = createBrowserRouter([
   {
     path: "/patologista",
     element: (
-      <Protected roles={["PATOLOGISTA", "ADMIN"]}> {/* coloque só PATOLOGISTA se preferir */}
+      <Protected roles={["PATOLOGISTA", "ADMIN"]}>
+        {/* coloque só PATOLOGISTA se preferir */}
         <Patologista />
       </Protected>
     ),
     children: [
-      { index: true, element: <QueuePatologista /> }, // ✅ FILA como página inicial do patologista
-      // Se quiser, no futuro: { path: "meus", element: <QueuePatologista mode="MEUS" /> },
+      { index: true, element: <QueuePatologista /> }, // FILA como página inicial do patologista
+      // futuro: { path: "meus", element: <QueuePatologista mode="MEUS" /> },
     ],
+  },
+
+  // ✅ NOVO: rota de impressão de etiquetas (abre página limpa para o print)
+  {
+    path: "/print/slides/:examId",
+    element: (
+      <Protected roles={["FUNCIONARIO", "ADMIN", "PATOLOGISTA"]}>
+        <PrintSlides />
+      </Protected>
+    ),
   },
 ]);
 

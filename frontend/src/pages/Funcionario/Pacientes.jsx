@@ -1,20 +1,22 @@
 import React, { useEffect, useMemo, useState } from 'react'
+
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 const token = () => localStorage.getItem('token') || ''
+
 const EXAM_TYPES = [
   { value: 'CITOLOGIA_ONCOTICA', label: 'Citologia Oncótica' },
   { value: 'ANATOMO_PATOLOGICO', label: 'Anátomo Patológico' }
 ]
 
 export default function Pacientes() {
-  const [list, setList] = useState([])
+  const [list, setList] = useState([])            // sempre array
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(false)
   const [convs, setConvs] = useState([])
   const [msg, setMsg] = useState('')
 
   // form create/edit
-  const [editing, setEditing] = useState(null) // {id,name,birthdate,convenio_id}
+  const [editing, setEditing] = useState(null)
   const [form, setForm] = useState({ name: '', birthdate: '', convenio_id: '' })
 
   // === MODAL: iniciar preparo ===
@@ -22,15 +24,15 @@ export default function Pacientes() {
   const [prepPatient, setPrepPatient] = useState(null)
   const [prepLoading, setPrepLoading] = useState(false)
   const [prepError, setPrepError] = useState('')
-  const [prepExams, setPrepExams] = useState([]) // exames do paciente
+  const [prepExams, setPrepExams] = useState([])   // sempre array
   const [prepExamId, setPrepExamId] = useState('')
   const [prepLaminas, setPrepLaminas] = useState('')
 
-  // responsáveis (novos)
-  const [staff, setStaff] = useState([])            // lista de usuários aptos
-  const [prepRespId, setPrepRespId] = useState('')  // id selecionado
+  // responsáveis
+  const [staff, setStaff] = useState([])
+  const [prepRespId, setPrepRespId] = useState('')
 
-  // (mantive se você ainda usa noutros lugares)
+  // (mantidos se usados em outros pontos)
   const [examOpenId] = useState(null)
   const [examType] = useState(EXAM_TYPES[0].value)
   const [examUrg] = useState(false)
@@ -40,19 +42,83 @@ export default function Pacientes() {
     []
   )
 
+  // ✅ abre janela de impressão com as etiquetas geradas
+  function openPrintWindow(slides = [], paciente = '', examId) {
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Etiquetas – Exame #${examId}</title>
+  <style>
+    @page { size: A4; margin: 12mm; }
+    body { font-family: Arial, sans-serif; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8mm; }
+    .tag {
+      border: 1px solid #333; border-radius: 6px; padding: 8px;
+      font-size: 14px; line-height: 1.3; text-align: center;
+    }
+    .big { font-weight: 700; font-size: 16px; }
+    .small { color: #555; font-size: 12px; }
+    .hdr { margin-bottom: 10px; font-size: 12px; color: #444; }
+    @media print { .no-print { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="hdr">Paciente: <b>${paciente || '-'}</b> • Exame #${examId}</div>
+  <div class="grid">
+    ${slides.map(s => `
+      <div class="tag">
+        <div class="big">${s.label}</div>
+        <div class="small">${paciente ? paciente + ' • ' : ''}Exame #${examId}</div>
+      </div>
+    `).join('')}
+  </div>
+  <div class="no-print" style="margin-top:16px"><button onclick="window.print()">Imprimir</button></div>
+</body>
+</html>
+    `.trim()
+
+    const win = window.open('', '_blank')
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+  }
+
+  // ✅ Garante array para {rows: [...]}, {items: [...]}, ou array direto
+  function normalizeToArray(data) {
+    if (Array.isArray(data)) return data
+    if (data && Array.isArray(data.rows)) return data.rows
+    if (data && Array.isArray(data.items)) return data.items
+    return []
+  }
+
   async function load() {
     setLoading(true)
     try {
       const url = q && q.length >= 2 ? `${API}/patients?q=${encodeURIComponent(q)}` : `${API}/patients`
       const res = await fetch(url, { headers })
-      setList(await res.json())
-    } finally { setLoading(false) }
+      const data = await res.json().catch(() => [])
+      setList(normalizeToArray(data))
+    } catch (e) {
+      setList([])
+      console.error('load patients failed:', e)
+    } finally {
+      setLoading(false)
+    }
   }
 
-  useEffect(() => { (async () => {
-    const r = await fetch(`${API}/patients/convenios`, { headers })
-    setConvs(await r.json())
-  })() }, [])
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${API}/patients/convenios`, { headers })
+        const data = await r.json().catch(() => [])
+        setConvs(normalizeToArray(data))
+      } catch {
+        setConvs([])
+      }
+    })()
+  }, [])
 
   useEffect(() => {
     const t = setTimeout(load, 250)
@@ -73,18 +139,27 @@ export default function Pacientes() {
     })
     setMsg('')
   }
+
   async function submitForm(e) {
     e.preventDefault()
     setMsg('')
     const method = editing ? 'PATCH' : 'POST'
     const url = editing ? `${API}/patients/${editing.id}` : `${API}/patients`
-    const res = await fetch(url, { method, headers, body: JSON.stringify(form) })
-    const data = await res.json()
-    if (!res.ok) return setMsg(data.error || 'Falha ao salvar')
-    setMsg(editing ? 'Paciente atualizado' : 'Paciente criado')
-    setEditing(null)
-    setForm({ name:'', birthdate:'', convenio_id:'' })
-    load()
+
+    try {
+      const res = await fetch(url, { method, headers, body: JSON.stringify(form) })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setMsg(data.error || 'Falha ao salvar')
+        return
+      }
+      setMsg(editing ? 'Paciente atualizado' : 'Paciente criado')
+      setEditing(null)
+      setForm({ name:'', birthdate:'', convenio_id:'' })
+      load()
+    } catch (e) {
+      setMsg('Falha ao salvar')
+    }
   }
 
   // === Fluxo do modal de preparo ===
@@ -99,24 +174,22 @@ export default function Pacientes() {
     setPrepRespId('')
 
     try {
-      // 1) exam do paciente
+      // 1) exames do paciente
       let res = await fetch(`${API}/patients/${patient.id}/exams`, { headers: { Authorization: `Bearer ${token()}` } })
       if (res.status === 404) {
         res = await fetch(`${API}/exams?patient_id=${patient.id}`, { headers: { Authorization: `Bearer ${token()}` } })
       }
-      const data = await res.json()
-      if (!res.ok) throw new Error(data?.error || 'Falha ao carregar exames do paciente')
-      const list = Array.isArray(data) ? data : (data.items || [])
+      const data = await res.json().catch(() => [])
+      const list = normalizeToArray(data)
       setPrepExams(list)
       setPrepExamId(list?.[0]?.id || '')
 
-      // 2) responsáveis (carrega sempre para manter atualizado)
+      // 2) responsáveis
       const rStaff = await fetch(`${API}/exams/responsaveis`, { headers })
-      const sData = await rStaff.json()
-      if (!rStaff.ok) throw new Error(sData?.error || 'Falha ao carregar responsáveis')
-      setStaff(sData)
+      const sData = await rStaff.json().catch(() => [])
+      setStaff(normalizeToArray(sData))
     } catch (e) {
-      setPrepError(e.message)
+      setPrepError(e.message || 'Falha ao carregar dados')
     } finally {
       setPrepLoading(false)
     }
@@ -144,10 +217,16 @@ export default function Pacientes() {
         headers,
         body: JSON.stringify({ laminas: Number(prepLaminas), responsavel_id: Number(prepRespId) })
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || 'Falha ao iniciar preparo')
 
       setMsg(`Preparo iniciado no exame #${data.id} (${data.status}).`)
+
+      // 👉 busca etiquetas geradas e abre impressão
+      const rSlides = await fetch(`${API}/exams/${prepExamId}/slides`, { headers })
+      const slides = (await rSlides.json().catch(() => [])) || []
+      openPrintWindow(slides, prepPatient?.name || '', prepExamId)
+
       closePrep()
       load()
     } catch (e) {
@@ -182,7 +261,9 @@ export default function Pacientes() {
               <label style={label}>Convênio</label>
               <select style={input} value={form.convenio_id} onChange={e=>setForm({...form, convenio_id:e.target.value})}>
                 <option value=''>Selecione...</option>
-                {convs.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                {Array.isArray(convs) && convs.map(c=>(
+                  <option key={c.id} value={c.id}>{c.nome}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -209,32 +290,27 @@ export default function Pacientes() {
             </tr>
           </thead>
           <tbody>
-            {list.map(p => (
-              <tr key={p.id} style={{borderTop:'1px solid #eee'}}>
-                <td style={{padding:8}}>{p.name}</td>
-                <td style={{padding:8}}>{p.birthdate ? p.birthdate.substring(0,10) : '-'}</td>
-                <td style={{padding:8}}>{p.convenio_nome || '-'}</td>
-                <td style={{padding:8}}>
-                  <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
-                    <button onClick={()=>startEdit(p)} style={{padding:'6px 10px', borderRadius:8, border:'1px solid #ccc', background:'#fff'}}>Editar</button>
-
-                    {/* Iniciar preparo */}
-                    <button
-                      onClick={()=>openPrep(p)}
-                      style={{padding:'6px 10px', borderRadius:8, border:'1px solid #ccc', background:'#fff'}}
-                    >
-                      Iniciar preparo
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {list.length === 0 && !loading && <tr><td colSpan="4" style={{padding:8, color:'#777'}}>Nenhum paciente.</td></tr>}
+            {Array.isArray(list) && list.length > 0 ? (
+              list.map(p => (
+                <tr key={p.id} style={{borderTop:'1px solid #eee'}}>
+                  <td style={{padding:8}}>{p.name}</td>
+                  <td style={{padding:8}}>{p.birthdate ? p.birthdate.substring(0,10) : '-'}</td>
+                  <td style={{padding:8}}>{p.convenio_nome || '-'}</td>
+                  <td style={{padding:8}}>
+                    <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
+                      <button onClick={()=>startEdit(p)} style={{padding:'6px 10px', borderRadius:8, border:'1px solid #ccc', background:'#fff'}}>Editar</button>
+                      <button onClick={()=>openPrep(p)} style={{padding:'6px 10px', borderRadius:8, border:'1px solid #ccc', background:'#fff'}}>Iniciar preparo</button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              !loading && <tr><td colSpan="4" style={{padding:8, color:'#777'}}>Nenhum paciente.</td></tr>
+            )}
           </tbody>
         </table>
       </div>
 
-      {/* Modal flutuante */}
       {prepOpen && (
         <div style={M.backdrop} onClick={closePrep}>
           <div style={M.modal} onClick={(e)=>e.stopPropagation()}>
@@ -257,7 +333,7 @@ export default function Pacientes() {
                     <select value={prepExamId} onChange={e=>setPrepExamId(e.target.value)} style={M.input}>
                       {prepExams.map(ex => (
                         <option key={ex.id} value={ex.id}>
-                          #{ex.id} • {String(ex.type || '').replaceAll('_',' ')} {ex.priority ? '• Prioritário' : ''}
+                          #{ex.id} • {String(ex.type || '').replaceAll('_',' ')} {ex.priority && ex.priority < 4 ? '• Prioritário' : ''}
                         </option>
                       ))}
                     </select>
@@ -273,7 +349,7 @@ export default function Pacientes() {
                   <label>Responsável</label>
                   <select value={prepRespId} onChange={e=>setPrepRespId(e.target.value)} style={M.input}>
                     <option value="">Selecione...</option>
-                    {staff.map(u => (
+                    {Array.isArray(staff) && staff.map(u => (
                       <option key={u.id} value={u.id}>
                         {u.name} {u.role ? `• ${u.role}` : ''}
                       </option>

@@ -155,7 +155,7 @@ router.get('/tray-today', async (_req, res) => {
         t.id            AS tray_id,
         e.id            AS exam_id,
         e.type,
-        e.priority      AS priority,   -- prioridade do EXAME
+        e.priority      AS priority,
         p.name          AS patient_name,
         t.note,
         t.created_at
@@ -184,7 +184,6 @@ router.put('/tray/:trayId(\\d+)', async (req, res) => {
 
   if (!trayId) return res.status(400).json({ error: 'ID inválido.' });
 
-  // Só ADMIN / FUNCIONARIO podem editar
   const role = req.user?.role;
   if (!['ADMIN','FUNCIONARIO'].includes(role))
     return res.status(403).json({ error: 'Sem permissão para editar a bandeja.' });
@@ -212,7 +211,6 @@ router.delete('/tray/:trayId(\\d+)', async (req, res) => {
   const trayId = Number(req.params.trayId);
   if (!trayId) return res.status(400).json({ error: 'ID inválido.' });
 
-  // Só ADMIN / FUNCIONARIO podem excluir
   const role = req.user?.role;
   if (!['ADMIN','FUNCIONARIO'].includes(role))
     return res.status(403).json({ error: 'Sem permissão para excluir da bandeja.' });
@@ -231,15 +229,19 @@ router.delete('/tray/:trayId(\\d+)', async (req, res) => {
    ROTAS COM :id (numérico)
    ========================= */
 
-// INICIAR PREPARO
+// INICIAR PREPARO (gera/recria etiquetas e muda status)
 router.post('/:id(\\d+)/start-prep', async (req, res) => {
   const examId = Number(req.params.id);
   const { laminas, responsavel_id } = req.body || {};
 
   if (!examId) return res.status(400).json({ error: 'Exame inválido.' });
-  if (!laminas || Number(laminas) <= 0)
+
+  const qtd = Number(laminas);
+  if (!qtd || qtd <= 0)
     return res.status(400).json({ error: 'Informe a quantidade de lâminas (> 0).' });
-  if (!responsavel_id || isNaN(Number(responsavel_id)))
+
+  const respId = Number(responsavel_id);
+  if (!respId)
     return res.status(400).json({ error: 'Selecione o responsável.' });
 
   try {
@@ -252,7 +254,7 @@ router.post('/:id(\\d+)/start-prep', async (req, res) => {
       return res.status(404).json({ error: 'Exame não encontrado.' });
     }
 
-    // Último status (se não houver, considere PENDENTE)
+    // Último status precisa ser PENDENTE
     const last = await query(
       `SELECT status
          FROM exam_steps
@@ -267,14 +269,14 @@ router.post('/:id(\\d+)/start-prep', async (req, res) => {
       return res.status(409).json({ error: `Exame não está pendente (status atual: ${lastStatus}).` });
     }
 
-    // valida responsável
+    // responsável válido?
     const u = await query(
       `SELECT id, name
          FROM users
         WHERE id = $1
           AND enabled = TRUE
           AND role IN ('FUNCIONARIO','PATOLOGISTA')`,
-      [responsavel_id]
+      [respId]
     );
     if (!u.rowCount) {
       await query('ROLLBACK');
@@ -282,21 +284,43 @@ router.post('/:id(\\d+)/start-prep', async (req, res) => {
     }
     const respName = u.rows[0].name;
 
-    // Atualiza dados no exame
+    // Atualiza metadados do preparo
     await query(
       `UPDATE exams
           SET prep_laminas = $1,
               prep_responsavel = $2,
               prep_started_at = NOW()
         WHERE id = $3`,
-      [Number(laminas), respName, examId]
+      [qtd, respName, examId]
     );
 
-    // Registra passo com responsible_id
+    // Recria etiquetas de forma idempotente (tipagem explícita p/ evitar erro do $1)
+    await query('DELETE FROM exam_slides WHERE exam_id = $1::int', [examId]);
+
+    await query(
+      `INSERT INTO exam_slides (exam_id, seq, label)
+       SELECT
+         $1::int                                           AS exam_id,
+         gs::int                                           AS seq,
+         (($1::int)::text || '_' || gs::int::text)         AS label
+       FROM generate_series(1, $2::int) AS gs`,
+      [examId, qtd]
+    );
+
+    // Registra etapa EM_PREPARO_INICIAL
     await query(
       `INSERT INTO exam_steps (exam_id, step, status, responsible_id, started_at)
        VALUES ($1, 'PREPARO_INICIAL', 'EM_PREPARO_INICIAL', $2, NOW())`,
-      [examId, Number(responsavel_id)]
+      [examId, respId]
+    );
+
+    // Busca as etiquetas criadas
+    const slidesRes = await query(
+      `SELECT seq, label, printed_at
+         FROM exam_slides
+        WHERE exam_id = $1::int
+        ORDER BY seq`,
+      [examId]
     );
 
     await query('COMMIT');
@@ -304,14 +328,14 @@ router.post('/:id(\\d+)/start-prep', async (req, res) => {
     res.json({
       id: examId,
       status: 'EM_PREPARO_INICIAL',
-      prep_laminas: Number(laminas),
+      prep_laminas: qtd,
       prep_responsavel: respName,
-      responsavel_id: Number(responsavel_id)
+      slides: slidesRes.rows
     });
   } catch (err) {
-    console.error('start-prep error:', err);
+    console.error('POST /exams/:id/start-prep', err);
     try { await query('ROLLBACK'); } catch {}
-    res.status(500).json({ error: 'Erro ao iniciar preparo do exame' });
+    res.status(500).json({ error: 'Erro ao iniciar preparo do exame', detail: String(err?.message || err) });
   }
 });
 
@@ -324,7 +348,6 @@ router.patch('/:id(\\d+)/priority', async (req, res) => {
     return res.status(400).json({ error: 'Prioridade inválida (1=Alta, 2=Média, 3=Normal).' });
   }
 
-  // Só ADMIN/FUNCIONARIO podem mudar
   const role = req.user?.role;
   if (!['ADMIN', 'FUNCIONARIO'].includes(role)) {
     return res.status(403).json({ error: 'Sem permissão para alterar prioridade.' });
@@ -445,19 +468,12 @@ router.post('/:id(\\d+)/conclude', async (req, res) => {
 /* =========================
    NOVO: ENFILEIRAR PARA PATOLOGISTA
    ========================= */
-/**
- * POST /exams/:id/enfileirar
- * Envia o exame para a fila do patologista (bandeja do dia).
- * body: { priority?: 1|2|3|4, note?: string }
- * Roles: ADMIN, FUNCIONARIO
- */
 router.post('/:id(\\d+)/enfileirar', async (req, res) => {
   const examId = Number(req.params.id);
   let { priority = null, note = null } = req.body || {};
 
   if (!examId) return res.status(400).json({ error: 'Exame inválido.' });
 
-  // Só ADMIN / FUNCIONARIO podem enfileirar
   const role = req.user?.role;
   if (!['ADMIN','FUNCIONARIO'].includes(role))
     return res.status(403).json({ error: 'Sem permissão para enfileirar.' });
@@ -465,7 +481,6 @@ router.post('/:id(\\d+)/enfileirar', async (req, res) => {
   try {
     await query('BEGIN');
 
-    // Confere exame e pega prioridade atual (se necessário)
     const e = await query('SELECT id, priority FROM exams WHERE id = $1', [examId]);
     if (!e.rowCount) {
       await query('ROLLBACK');
@@ -474,7 +489,6 @@ router.post('/:id(\\d+)/enfileirar', async (req, res) => {
     const examPriority = e.rows[0].priority;
     const finalPriority = [1,2,3,4].includes(Number(priority)) ? Number(priority) : examPriority;
 
-    // Evita duplicar na bandeja do dia (índice unique ajuda, mas tratamos o retorno)
     const ins = await query(
       `INSERT INTO exam_tray (exam_id, priority, note, added_by, tray_status, created_at)
        VALUES ($1, $2, $3, $4, 'NA_FILA', NOW())
@@ -484,7 +498,6 @@ router.post('/:id(\\d+)/enfileirar', async (req, res) => {
     );
 
     if (!ins.rowCount) {
-      // Já existe para hoje: retorna o já existente
       const r2 = await query(
         `SELECT id, exam_id, priority, tray_status, created_at
            FROM exam_tray
@@ -494,9 +507,7 @@ router.post('/:id(\\d+)/enfileirar', async (req, res) => {
         [examId]
       );
       await query('COMMIT');
-      return res
-        .status(200)
-        .json({ info: 'already_in_today_tray', ...r2.rows[0] });
+      return res.status(200).json({ info: 'already_in_today_tray', ...r2.rows[0] });
     }
 
     await query('COMMIT');
@@ -509,7 +520,6 @@ router.post('/:id(\\d+)/enfileirar', async (req, res) => {
 });
 
 // ADICIONA UM EXAME CONCLUÍDO NA "BANDEJA DO DIA"
-// (não define prioridade aqui; usamos a prioridade do EXAME)
 router.post('/:id(\\d+)/add-to-tray', async (req, res) => {
   const examId = Number(req.params.id);
   const { note = null } = req.body || {};
@@ -567,6 +577,46 @@ router.post('/:id(\\d+)/add-to-tray', async (req, res) => {
     console.error('POST /exams/:id/add-to-tray', e);
     try { await query('ROLLBACK'); } catch {}
     res.status(500).json({ error: 'Erro ao adicionar exame na bandeja do dia.' });
+  }
+});
+
+/* =========================
+   SLIDES (etiquetas)
+   ========================= */
+
+// Lista etiquetas do exame
+router.get('/:id(\\d+)/slides', async (req, res) => {
+  const examId = Number(req.params.id);
+  try {
+    const r = await query(
+      `SELECT seq, label, printed_at
+         FROM exam_slides
+        WHERE exam_id = $1::int
+        ORDER BY seq`,
+      [examId]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    console.error('GET /exams/:id/slides', e);
+    res.status(500).json({ error: 'Erro ao listar etiquetas.' });
+  }
+});
+
+// Marca todas as etiquetas do exame como impressas
+router.patch('/:id(\\d+)/slides/printed', async (req, res) => {
+  const examId = Number(req.params.id);
+  try {
+    await query(
+      `UPDATE exam_slides
+          SET printed_at = NOW()
+        WHERE exam_id = $1::int
+          AND printed_at IS NULL`,
+      [examId]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PATCH /exams/:id/slides/printed', e);
+    res.status(500).json({ error: 'Erro ao marcar impressão.' });
   }
 });
 

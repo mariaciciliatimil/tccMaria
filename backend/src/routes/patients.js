@@ -1,189 +1,238 @@
 // backend/src/routes/patients.js
-import { Router } from 'express';
-import { query } from '../db.js';
+import { Router } from 'express'
+import { query } from '../db.js'
 
-const router = Router();
+const router = Router()
 
-// Helper: manter só dígitos
-const onlyDigits = (s = '') => String(s).replace(/\D+/g, '');
+// util
+const onlyDigits = (s = '') => String(s).replace(/\D+/g, '')
 
 // ==============================
-// CONVÊNIOS (apoio ao formulário)
+// Convênios (para o select)
 // ==============================
 router.get('/convenios', async (_req, res) => {
   try {
-    const { rows } = await query(
-      `SELECT id, nome
-         FROM convenios
-        ORDER BY nome`
-    );
-    res.json(rows);
+    const r = await query(`SELECT id, nome FROM convenios ORDER BY nome`)
+    res.json(r.rows)
   } catch (e) {
-    console.error('GET /patients/convenios', e);
-    res.status(500).json({ error: 'erro_listar_convenios' });
+    console.error('GET /patients/convenios', e)
+    res.status(500).json({ error: 'Erro ao listar convênios', detail: String(e.message || e) })
   }
-});
-
-// ============================================
-// BUSCA: nome (>=2) OU CPF (11 dígitos exatos)
-// ============================================
-router.get('/search', async (req, res) => {
-  try {
-    const q = (req.query.q || '').trim();
-    if (!q) return res.json([]);
-
-    const digits = onlyDigits(q);
-    if (digits.length === 11) {
-      const { rows } = await query(
-        `SELECT id, name, document AS cpf, phone, birthdate, convenio_id
-           FROM patients
-          WHERE document = $1
-          ORDER BY id DESC
-          LIMIT 5`,
-        [digits]
-      );
-      return res.json(rows);
-    }
-
-    if (q.length < 2) return res.json([]);
-
-    const { rows } = await query(
-      `SELECT id, name, document AS cpf, phone, birthdate, convenio_id
-         FROM patients
-        WHERE lower(name) LIKE lower($1)
-        ORDER BY name
-        LIMIT 20`,
-      [`%${q}%`]
-    );
-    return res.json(rows);
-  } catch (e) {
-    console.error('GET /patients/search', e);
-    res.status(500).json({ error: 'erro_busca_pacientes' });
-  }
-});
+})
 
 // ==============================
-// LISTAGEM (compatibilidade)
-//   - /patients               (ultimos 50)
-//   - /patients?patient_id=id (1 paciente)
+// Busca autocomplete: nome (2+) ou CPF (11)
+// /patients/search?q=...
+// ==============================
+router.get('/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim()
+    if (!q) return res.json([])
+
+    const digits = onlyDigits(q)
+    if (digits.length === 11) {
+      const r = await query(
+        `SELECT p.id, p.name, p.document AS cpf, p.phone, p.birthdate, p.convenio_id
+           FROM patients p
+          WHERE p.document = $1
+          ORDER BY p.name
+          LIMIT 20`,
+        [digits]
+      )
+      return res.json(r.rows)
+    }
+
+    if (q.length < 2) return res.json([])
+    const r = await query(
+      `SELECT p.id, p.name, p.document AS cpf, p.phone, p.birthdate, p.convenio_id
+         FROM patients p
+        WHERE p.name ILIKE $1
+        ORDER BY p.name
+        LIMIT 20`,
+      [`%${q}%`]
+    )
+    res.json(r.rows)
+  } catch (e) {
+    console.error('GET /patients/search', e)
+    res.status(500).json({ error: 'Erro na busca de pacientes', detail: String(e.message || e) })
+  }
+})
+
+// ==============================
+// Listagem básica (+ filtro por nome via ?q=)
 // ==============================
 router.get('/', async (req, res) => {
   try {
-    const { patient_id } = req.query;
-    if (patient_id) {
-      const r = await query(
-        `SELECT id, name, document AS cpf, phone, birthdate, convenio_id, created_at
-           FROM patients
-          WHERE id = $1`,
-        [Number(patient_id)]
-      );
-      return res.json(r.rows);
+    const q = String(req.query.q || '').trim()
+    let r
+    if (q && q.length >= 2) {
+      r = await query(
+        `SELECT p.id, p.name, p.birthdate, p.convenio_id, c.nome AS convenio_nome
+           FROM patients p
+      LEFT JOIN convenios c ON c.id = p.convenio_id
+          WHERE p.name ILIKE $1
+          ORDER BY p.name
+          LIMIT 100`,
+        [`%${q}%`]
+      )
+    } else {
+      r = await query(
+        `SELECT p.id, p.name, p.birthdate, p.convenio_id, c.nome AS convenio_nome
+           FROM patients p
+      LEFT JOIN convenios c ON c.id = p.convenio_id
+          ORDER BY p.created_at DESC, p.id DESC
+          LIMIT 100`
+      )
     }
-    const r = await query(
-      `SELECT id, name, document AS cpf, phone, birthdate, convenio_id, created_at
-         FROM patients
-        ORDER BY created_at DESC NULLS LAST, id DESC
-        LIMIT 50`
-    );
-    res.json(r.rows);
+    res.json(r.rows)
   } catch (e) {
-    console.error('GET /patients', e);
-    res.status(500).json({ error: 'erro_listar_pacientes' });
+    console.error('GET /patients', e)
+    res.status(500).json({ error: 'Erro ao listar pacientes', detail: String(e.message || e) })
   }
-});
+})
 
 // ==============================
-// DETALHE POR ID (compatibilidade)
-// ==============================
-router.get('/:id(\\d+)', async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const { rows } = await query(
-      `SELECT id, name, document AS cpf, phone, birthdate, convenio_id, created_at
-         FROM patients
-        WHERE id = $1`,
-      [id]
-    );
-    if (!rows.length) return res.status(404).json({ error: 'paciente_nao_encontrado' });
-    res.json(rows[0]);
-  } catch (e) {
-    console.error('GET /patients/:id', e);
-    res.status(500).json({ error: 'erro_detalhe_paciente' });
-  }
-});
-
-// ==============================
-// CRIAR PACIENTE (com CPF/telefone)
+// Criar paciente (tela Pacientes)
+// body: { name, birthdate?, convenio_id? }
 // ==============================
 router.post('/', async (req, res) => {
   try {
-    let { name, cpf, phone, birthdate, convenio_id } = req.body || {};
-    if (!name || !String(name).trim()) {
-      return res.status(400).json({ error: 'nome_obrigatorio' });
-    }
+    const { name, birthdate = null, convenio_id = null } = req.body || {}
+    if (!name) return res.status(400).json({ error: 'Informe o nome.' })
 
-    cpf = cpf ? onlyDigits(cpf) : null;
-    if (cpf && cpf.length !== 11) {
-      return res.status(400).json({ error: 'cpf_invalido' });
-    }
-
-    phone = phone ? onlyDigits(phone) : null;
-
-    // evita duplicar CPF
-    if (cpf) {
-      const exists = await query(
-        `SELECT id FROM patients WHERE document = $1 LIMIT 1`,
-        [cpf]
-      );
-      if (exists.rowCount) {
-        return res.status(409).json({ error: 'cpf_ja_cadastrado', id: exists.rows[0].id });
-      }
-    }
-
-    const { rows } = await query(
-      `INSERT INTO patients (name, document, phone, birthdate, convenio_id)
-       VALUES ($1,$2,$3,$4,$5)
-       RETURNING id, name, document AS cpf, phone, birthdate, convenio_id, created_at`,
-      [name.trim(), cpf, phone, birthdate || null, convenio_id || null]
-    );
-    res.status(201).json(rows[0]);
+    const ins = await query(
+      `INSERT INTO patients (name, birthdate, convenio_id)
+       VALUES ($1,$2,$3)
+       RETURNING id, name, birthdate, convenio_id`,
+      [name, birthdate || null, convenio_id || null]
+    )
+    res.status(201).json(ins.rows[0])
   } catch (e) {
-    console.error('POST /patients', e);
-    res.status(500).json({ error: 'erro_criar_paciente' });
+    console.error('POST /patients', e)
+    res.status(500).json({ error: 'Erro ao criar paciente', detail: String(e.message || e) })
   }
-});
+})
 
 // ==============================
-// ATUALIZAR PACIENTE
+// Editar paciente
+// body: { name?, birthdate?, convenio_id? }
 // ==============================
-router.put('/:id(\\d+)', async (req, res) => {
+router.patch('/:id(\\d+)', async (req, res) => {
+  const id = Number(req.params.id)
+  if (!id) return res.status(400).json({ error: 'ID inválido' })
   try {
-    const id = Number(req.params.id);
-    let { name, cpf, phone, birthdate, convenio_id } = req.body || {};
-
-    cpf = cpf ? onlyDigits(cpf) : null;
-    if (cpf && cpf.length !== 11) {
-      return res.status(400).json({ error: 'cpf_invalido' });
-    }
-    phone = phone ? onlyDigits(phone) : null;
-
-    const { rows } = await query(
+    const { name = null, birthdate = null, convenio_id = null } = req.body || {}
+    const upd = await query(
       `UPDATE patients
           SET name        = COALESCE($1, name),
-              document    = $2,
-              phone       = $3,
-              birthdate   = $4,
-              convenio_id = $5
-        WHERE id = $6
-        RETURNING id, name, document AS cpf, phone, birthdate, convenio_id, created_at`,
-      [name?.trim() ?? null, cpf, phone, birthdate || null, convenio_id || null, id]
-    );
-    if (!rows.length) return res.status(404).json({ error: 'paciente_nao_encontrado' });
-    res.json(rows[0]);
+              birthdate   = COALESCE($2, birthdate),
+              convenio_id = COALESCE($3, convenio_id)
+        WHERE id = $4
+        RETURNING id, name, birthdate, convenio_id`,
+      [name, birthdate, convenio_id, id]
+    )
+    if (!upd.rowCount) return res.status(404).json({ error: 'Paciente não encontrado' })
+    res.json(upd.rows[0])
   } catch (e) {
-    console.error('PUT /patients/:id', e);
-    res.status(500).json({ error: 'erro_atualizar_paciente' });
+    console.error('PATCH /patients/:id', e)
+    res.status(500).json({ error: 'Erro ao atualizar paciente', detail: String(e.message || e) })
   }
-});
+})
 
-export default router;
+// ==============================
+// Exames de um paciente (modal Iniciar Preparo)
+// ==============================
+router.get('/:id(\\d+)/exams', async (req, res) => {
+  const id = Number(req.params.id)
+  try {
+    const r = await query(
+      `SELECT id, type, priority, created_at
+         FROM exams
+        WHERE patient_id = $1
+        ORDER BY created_at DESC`,
+      [id]
+    )
+    res.json(r.rows)
+  } catch (e) {
+    console.error('GET /patients/:id/exams', e)
+    res.status(500).json({ error: 'Erro ao listar exames do paciente', detail: String(e.message || e) })
+  }
+})
+
+// ==============================
+// Iniciar paciente: cria/atualiza paciente e cria EXAME
+// body: {
+//   patient: { id?, name, cpf?, phone?, birthdate?, convenio_id? },
+//   exam:    { type, priority?=4 }
+// }
+// ==============================
+router.post('/initiate', async (req, res) => {
+  try {
+    const { patient = {}, exam = {} } = req.body || {}
+    let {
+      id,
+      name,
+      cpf = null,
+      phone = null,
+      birthdate = null,
+      convenio_id = null,
+    } = patient
+    const { type, priority = 4 } = exam
+
+    // validações
+    if (!id && !name) return res.status(400).json({ error: 'Informe o nome do paciente.' })
+    if (!type)        return res.status(400).json({ error: 'Informe o tipo de exame.' })
+
+    // normalizações
+    const cpfDigits   = cpf ? onlyDigits(cpf)   : null
+    const phoneDigits = phone ? onlyDigits(phone) : null
+    if (cpfDigits && cpfDigits.length !== 11) {
+      return res.status(400).json({ error: 'CPF inválido (11 dígitos).' })
+    }
+
+    await query('BEGIN')
+
+    // cria ou atualiza paciente
+    let patientId = id ? Number(id) : null
+    if (!patientId) {
+      const ins = await query(
+        `INSERT INTO patients (name, document, phone, birthdate, convenio_id, created_at)
+         VALUES ($1,$2,$3,$4,$5, NOW())
+         RETURNING id, name`,
+        [name, cpfDigits, phoneDigits, birthdate || null, convenio_id || null]
+      )
+      patientId = ins.rows[0].id
+    } else {
+      await query(
+        `UPDATE patients
+            SET name        = COALESCE($1, name),
+                document    = COALESCE($2, document),
+                phone       = COALESCE($3, phone),
+                birthdate   = COALESCE($4, birthdate),
+                convenio_id = COALESCE($5, convenio_id)
+          WHERE id = $6`,
+        [name || null, cpfDigits, phoneDigits, birthdate || null, convenio_id || null, patientId]
+      )
+    }
+
+    // cria exame
+    const insExam = await query(
+      `INSERT INTO exams (patient_id, type, priority, created_at)
+       VALUES ($1, $2, $3, NOW())
+       RETURNING id, patient_id, type, priority, created_at`,
+      [patientId, String(type).toUpperCase(), Number(priority)]
+    )
+
+    await query('COMMIT')
+    return res.status(201).json({
+      patient: { id: patientId, name: name },
+      exam: insExam.rows[0],
+    })
+  } catch (e) {
+    console.error('POST /patients/initiate', e)
+    try { await query('ROLLBACK') } catch {}
+    return res.status(500).json({ error: 'Erro ao iniciar paciente', detail: String(e.message || e) })
+  }
+})
+
+export default router
