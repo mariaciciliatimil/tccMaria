@@ -1,225 +1,218 @@
-import { useEffect, useMemo, useState } from 'react';
-import './pathologista.css';
+// src/pages/Patologista/Queue.jsx
+import React, { useEffect, useMemo, useState } from "react";
 
-// ✅ fallback seguro caso a variável de ambiente não esteja configurada
-const BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
+const token = () => localStorage.getItem("token") || "";
 
-function authHeaders() {
-  const t = localStorage.getItem('token');
-  return t ? { Authorization: `Bearer ${t}` } : {};
-}
+const PRIORITY_UI = {
+  1: { name: "P1 — Emergência", bg: "#ffe0e0", br: "#f3b4b4", dot: "#e11d48" },
+  2: { name: "P2 — Muito urgente", bg: "#ffe9d6", br: "#f7cfa7", dot: "#f59e0b" },
+  3: { name: "P3 — Urgente", bg: "#fff6cc", br: "#f4e79a", dot: "#f59e0b" },
+  4: { name: "P4 — Rotina", bg: "#e6f7e6", br: "#bfe7bf", dot: "#10b981" },
+};
 
-// ✅ helper que valida JSON antes de dar res.json()
-async function fetchJson(url, opts = {}) {
-  const res = await fetch(url, opts);
-  const ct = res.headers.get('content-type') || '';
-  if (!ct.includes('application/json')) {
-    const text = await res.text();
-    throw new Error(
-      `Resposta inesperada (${res.status}). Verifique VITE_API_URL. URL chamada: ${url}\n` +
-      text.slice(0, 200)
-    );
-  }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error || `Falha na requisição (${res.status})`);
-  }
-  return res.json();
+function priorityStyle(p = 4) {
+  const s = PRIORITY_UI[p] || PRIORITY_UI[4];
+  return {
+    background: s.bg,
+    border: `1px solid ${s.br}`,
+  };
 }
 
 export default function QueuePatologista() {
-  const [tab, setTab] = useState('FILA'); // FILA | MEUS
-  const [hoje, setHoje] = useState(true);
-  const [status, setStatus] = useState('NA_FILA'); // NA_FILA | EM_ANALISE | CONCLUIDO
-  const [busca, setBusca] = useState('');
+  const [onlyToday, setOnlyToday] = useState(true);
+  const [q, setQ] = useState("");
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState('');
 
-  async function listarFila({ hoje = true, status = 'NA_FILA', busca = '' } = {}) {
-    const qs = new URLSearchParams();
-    if (hoje) qs.set('hoje', '1');
-    if (status) qs.set('status', status);
-    if (busca) qs.set('busca', busca);
-    return fetchJson(`${BASE}/patologista/fila?${qs.toString()}`, {
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    });
-  }
-
-  async function listarMeus() {
-    return fetchJson(`${BASE}/patologista/meus`, {
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    });
-  }
-
-  async function iniciarAnalise(bandejaId) {
-    return fetchJson(`${BASE}/patologista/${bandejaId}/iniciar`, {
-      method: 'PATCH',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    });
-  }
-
-  async function concluirAnalise(bandejaId) {
-    return fetchJson(`${BASE}/patologista/${bandejaId}/concluir`, {
-      method: 'PATCH',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    });
-  }
+  const headers = useMemo(
+    () => ({ "Content-Type": "application/json", Authorization: `Bearer ${token()}` }),
+    []
+  );
 
   async function load() {
+    setLoading(true);
     try {
-      setErr('');
-      setLoading(true);
-      const data = tab === 'FILA'
-        ? await listarFila({ hoje, status, busca })
-        : await listarMeus();
-      setItems(data);
+      // 👉 usa apenas a rota que existe no backend
+      const res = await fetch(`${API}/exams/tray-today`, { headers });
+      const data = await res.json();
+
+      // normaliza
+      let arr = Array.isArray(data)
+        ? data.map((r) => ({
+            id: r.exam_id ?? r.id,
+            exam_id: r.exam_id ?? r.id,
+            type: r.type,
+            priority: r.priority ?? 4,
+            patient_name: r.patient_name,
+            tray_status: r.tray_status ?? "NA_FILA",
+            created_at: r.created_at,
+          }))
+        : [];
+
+      // filtro texto
+      if (q) {
+        const k = q.toLowerCase();
+        arr = arr.filter(
+          (it) =>
+            (it.patient_name || "").toLowerCase().includes(k) ||
+            (it.type || "").toLowerCase().includes(k)
+        );
+      }
+
+      // (por garantia) apenas hoje
+      if (onlyToday) {
+        const today = new Date().toISOString().slice(0, 10);
+        arr = arr.filter((it) => (it.created_at || "").slice(0, 10) === today);
+      }
+
+      setItems(arr);
     } catch (e) {
       console.error(e);
-      setErr(e.message || 'Erro ao carregar');
+      setItems([]);
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { load(); }, [tab, hoje, status, busca]);
   useEffect(() => {
-    const t = setInterval(load, 30000);
-    return () => clearInterval(t);
-  }, [tab, hoje, status, busca]);
-
-  const title = useMemo(
-    () => (tab === 'FILA' ? 'Fila do Patologista' : 'Meus em Análise'),
-    [tab]
-  );
+    const t = setTimeout(load, 250);
+    return () => clearTimeout(t);
+  }, [q, onlyToday]);
 
   return (
-    <div className="pat-page">
-      <header className="pat-header">
-        <h1>{title}</h1>
-        <div className="pat-tabs">
-          <button
-            className={tab === 'FILA' ? 'active' : ''}
-            onClick={() => setTab('FILA')}
-          >
-            Fila
-          </button>
-          <button
-            className={tab === 'MEUS' ? 'active' : ''}
-            onClick={() => setTab('MEUS')}
-          >
-            Meus
-          </button>
-        </div>
+    <div style={{ maxWidth: 1200, margin: "0 auto", paddingTop: 6 }}>
+      <h1 style={{ textAlign: "center", marginBottom: 20 }}>ÁREA DO PATOLOGISTA</h1>
 
-        {tab === 'FILA' && (
-          <div className="pat-filters">
-            <label className="chk">
-              <input
-                type="checkbox"
-                checked={hoje}
-                onChange={(e) => setHoje(e.target.checked)}
-              />
-              Apenas hoje
-            </label>
-            <select value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="NA_FILA">Na fila</option>
-              <option value="EM_ANALISE">Em análise</option>
-              <option value="CONCLUIDO">Concluídos</option>
-            </select>
-            <input
-              className="search"
-              placeholder="Buscar paciente ou tipo de exame..."
-              value={busca}
-              onChange={(e) => setBusca(e.target.value)}
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input type="checkbox" checked={onlyToday} onChange={(e) => setOnlyToday(e.target.checked)} />
+          Apenas hoje
+        </label>
+
+        <input
+          style={{
+            flex: 1,
+            padding: "10px 12px",
+            border: "1px solid #d0d5dd",
+            borderRadius: 8,
+            outline: "none",
+          }}
+          placeholder="Buscar paciente ou tipo de exame…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+
+        <button
+          onClick={load}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 8,
+            border: "1px solid #cbd5e1",
+            background: "#fff",
+            cursor: "pointer",
+          }}
+        >
+          Atualizar
+        </button>
+      </div>
+
+      {/* legenda de prioridades */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        {Object.entries(PRIORITY_UI).map(([k, v]) => (
+          <span
+            key={k}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "6px 10px",
+              borderRadius: 999,
+              border: `1px solid ${v.br}`,
+              background: v.bg,
+              fontSize: 14,
+            }}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: 999,
+                background: v.dot,
+                display: "inline-block",
+              }}
             />
-            <button className="refresh" onClick={load}>
-              Atualizar
+            {v.name}
+          </span>
+        ))}
+      </div>
+
+      {loading && <div style={{ color: "#64748b" }}>Carregando…</div>}
+
+      {!loading && items.length === 0 && (
+        <div style={{ color: "#64748b" }}>Nenhum exame na fila.</div>
+      )}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+          gap: 16,
+          marginTop: 12,
+        }}
+      >
+        {items.map((ex) => (
+          <div
+            key={ex.exam_id}
+            style={{
+              ...priorityStyle(ex.priority),
+              borderRadius: 12,
+              padding: 14,
+              boxShadow: "0 8px 24px rgba(0,0,0,.06)",
+            }}
+          >
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>
+              {String(ex.type || "").toUpperCase().replaceAll("_", " ")}
+            </div>
+            <div style={{ color: "#334155", marginBottom: 8 }}>{ex.patient_name}</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
+              {new Date(ex.created_at).toLocaleString()}
+              {ex.tray_status ? (
+                <span
+                  style={{
+                    marginLeft: 8,
+                    fontSize: 11,
+                    padding: "2px 6px",
+                    borderRadius: 6,
+                    border: "1px solid #cbd5e1",
+                    background: "#fff",
+                  }}
+                >
+                  {ex.tray_status}
+                </span>
+              ) : null}
+            </div>
+
+            <button
+              style={{
+                padding: "8px 12px",
+                borderRadius: 10,
+                background: "#3b82f6",
+                color: "#fff",
+                border: "none",
+                cursor: "pointer",
+                fontWeight: 700,
+              }}
+              onClick={() => {
+                // TODO: implementar iniciar análise (quando você criar a rota)
+                alert(`Iniciar análise do exame #${ex.exam_id}`);
+              }}
+            >
+              Iniciar análise
             </button>
           </div>
-        )}
-      </header>
-
-      {err && <div className="pat-error">{err}</div>}
-      {loading && <div className="pat-loading">Carregando...</div>}
-
-      <section className="pat-cards">
-        {!loading && items.length === 0 && (
-          <p className="empty">Nada por aqui.</p>
-        )}
-        {items.map((row) => (
-          <article
-            key={
-              row.bandeja_id ||
-              row.tray_id ||
-              `${row.exame_id}-${row.iniciado_em || ''}`
-            }
-            className={`pat-card ${
-              row.prioridade === 1
-                ? 'prio-1'
-                : row.prioridade === 2
-                ? 'prio-2'
-                : row.prioridade === 3
-                ? 'prio-3'
-                : 'prio-4'
-            }`}
-          >
-            <div className="pat-card-head">
-              <strong>{row.tipo_exame || row.type || 'Exame'}</strong>
-              <span className={`badge ${row.status_bandeja || 'NA_FILA'}`}>
-                {row.status_bandeja || 'NA_FILA'}
-              </span>
-            </div>
-            <div className="pat-card-sub">
-              <span className="patient">
-                {row.paciente || row.patient_name || 'Paciente'}
-              </span>
-              <span className="date">
-                {formatDateTime(row.adicionado_em || row.created_at)}
-              </span>
-            </div>
-            {row.observacao && (
-              <div className="pat-card-note">{row.observacao}</div>
-            )}
-            <div className="pat-card-actions">
-              {(row.status_bandeja === 'NA_FILA' || !row.status_bandeja) && (
-                <button
-                  className="btn primary"
-                  onClick={async () => {
-                    await iniciarAnalise(row.bandeja_id || row.tray_id);
-                    load();
-                  }}
-                >
-                  Iniciar análise
-                </button>
-              )}
-              {row.status_bandeja === 'EM_ANALISE' && (
-                <button
-                  className="btn success"
-                  onClick={async () => {
-                    await concluirAnalise(row.bandeja_id || row.tray_id);
-                    load();
-                  }}
-                >
-                  Concluir
-                </button>
-              )}
-            </div>
-          </article>
         ))}
-      </section>
+      </div>
     </div>
   );
-}
-
-function formatDateTime(v) {
-  try {
-    return new Date(v).toLocaleString();
-  } catch {
-    return '-';
-  }
 }
