@@ -9,7 +9,7 @@ import usersRoutes from './routes/users.js';
 import examsRoutes from './routes/exams.js';
 import patientsRoutes from './routes/patients.js';
 import reportsRoutes from './routes/reports.js';
-import patologistaRoutes from './routes/patologista.js'; // ✅ nova rota do patologista
+import patologistaRoutes from './routes/patologista.js'; // ✅ rota do patologista
 
 import { authRequired, allowRoles } from './middleware/auth.js';
 
@@ -19,7 +19,7 @@ const app = express();
 app.use(
   cors({
     origin: process.env.CORS_ORIGIN?.split(',') || '*',
-    credentials: true, // caso use cookie httpOnly
+    credentials: true,
   })
 );
 app.use(express.json());
@@ -36,19 +36,27 @@ app.get('/health', async (_req, res) => {
 
 // === Rotas principais ===
 app.use('/auth', authRoutes);
+
+// 👥 Usuários (somente ADMIN)
 app.use('/users', authRequired, allowRoles('ADMIN'), usersRoutes);
+
+// 🧪 Exames (Admin, Funcionário, Patologista)
 app.use(
   '/exams',
   authRequired,
   allowRoles('ADMIN', 'FUNCIONARIO', 'PATOLOGISTA'),
   examsRoutes
 );
+
+// 👩‍⚕️ Pacientes (Admin, Funcionário, Patologista — agora liberado!)
 app.use(
   '/patients',
   authRequired,
-  allowRoles('ADMIN', 'FUNCIONARIO'),
+  allowRoles('ADMIN', 'FUNCIONARIO', 'PATOLOGISTA'),
   patientsRoutes
 );
+
+// 📄 Relatórios
 app.use(
   '/reports',
   authRequired,
@@ -56,7 +64,7 @@ app.use(
   reportsRoutes
 );
 
-// ✅ Nova rota: Área do Patologista (Módulo IV)
+// 🔬 Nova rota: Área do Patologista (Módulo IV)
 app.use(
   '/patologista',
   authRequired,

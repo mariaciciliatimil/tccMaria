@@ -160,6 +160,30 @@ router.get('/:id(\\d+)/exams', async (req, res) => {
 })
 
 // ==============================
+// (NOVO) Histórico do paciente
+// GET /patients/:id/history
+// Retorna últimos exames (id, tipo, prioridade, criado_em)
+// ==============================
+router.get('/:id(\\d+)/history', async (req, res) => {
+  const id = Number(req.params.id)
+  if (!id) return res.status(400).json({ error: 'ID inválido' })
+  try {
+    const r = await query(
+      `SELECT e.id, e.type, e.priority, e.created_at
+         FROM exams e
+        WHERE e.patient_id = $1
+        ORDER BY e.created_at DESC
+        LIMIT 50`,
+      [id]
+    )
+    res.json(r.rows)
+  } catch (e) {
+    console.error('GET /patients/:id/history', e)
+    res.status(500).json({ error: 'Erro ao listar histórico do paciente', detail: String(e.message || e) })
+  }
+})
+
+// ==============================
 // Iniciar paciente: cria/atualiza paciente e cria EXAME
 // body: {
 //   patient: { id?, name, cpf?, phone?, birthdate?, convenio_id? },

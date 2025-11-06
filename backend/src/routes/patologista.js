@@ -17,23 +17,19 @@ router.get('/fila', async (req, res) => {
     const rawStatus = (req.query.status || 'NA_FILA').toString().toUpperCase();
     const busca = (req.query.busca || '').trim();
 
-    // garante um status válido
     const OK = new Set(['NA_FILA','EM_ANALISE','CONCLUIDO']);
     const status = OK.has(rawStatus) ? rawStatus : 'NA_FILA';
 
     const params = [];
     const where = [];
 
-    // status da bandeja
     params.push(status);
     where.push(`t.tray_status = $${params.length}`);
 
-    // apenas hoje? (usa a data do created_at)
     if (hoje) {
       where.push(`t.created_at::date = CURRENT_DATE`);
     }
 
-    // busca por paciente / tipo de exame
     if (busca) {
       params.push(`%${busca}%`);
       params.push(`%${busca}%`);
@@ -60,7 +56,6 @@ router.get('/fila', async (req, res) => {
       ORDER BY t.priority ASC, t.created_at::date ASC, t.created_at ASC
       LIMIT 200
     `;
-
     const { rows } = await query(sql, params);
     return res.json(rows);
   } catch (e) {
@@ -107,6 +102,68 @@ router.get('/meus', async (req, res) => {
   } catch (e) {
     console.error('GET /patologista/meus', e);
     return res.status(500).json({ error: 'erro_listar_meus', detail: String(e.message || e) });
+  }
+});
+
+/**
+ * 🔎 GET /patologista/exame/:id/detalhes
+ * Dados para o pop-up (exame + paciente + etiquetas + histórico)
+ */
+router.get('/exame/:id/detalhes', async (req, res) => {
+  const examId = Number(req.params.id);
+  if (!examId) return res.status(400).json({ error: 'id_invalido' });
+
+  try {
+    const examSql = `
+      WITH last_step AS (
+        SELECT DISTINCT ON (exam_id) exam_id, status, started_at
+        FROM exam_steps
+        WHERE exam_id = $1
+        ORDER BY exam_id, started_at DESC, id DESC
+      )
+      SELECT
+        e.id, e.type, e.priority,
+        COALESCE(ls.status, 'PENDENTE') AS status,
+        e.created_at,
+        e.prep_laminas, e.prep_responsavel, e.prep_started_at,
+        p.id   AS patient_id,
+        p.name AS patient_name,
+        p.birthdate,
+        p.document AS cpf
+      FROM exams e
+      JOIN patients p ON p.id = e.patient_id
+      LEFT JOIN last_step ls ON ls.exam_id = e.id
+      WHERE e.id = $1
+    `;
+    const exam = await query(examSql, [examId]);
+    if (!exam.rowCount) return res.status(404).json({ error: 'exame_nao_encontrado' });
+
+    const slides = await query(
+      `SELECT seq, label, printed_at
+         FROM exam_slides
+        WHERE exam_id = $1
+        ORDER BY seq`,
+      [examId]
+    );
+
+    const history = await query(
+      `SELECT id, type, priority, created_at
+         FROM exams
+        WHERE patient_id = $1
+          AND id <> $2
+        ORDER BY created_at DESC
+        LIMIT 20`,
+      [exam.rows[0].patient_id, examId]
+    );
+
+    res.json({
+      exam: exam.rows[0],
+      slides: slides.rows,
+      history: history.rows
+    });
+  } catch (e) {
+    console.error('GET /patologista/exame/:id/detalhes', e);
+    return res.status(500).json({ error: 'erro_detalhes', detail: String(e.message || e) });
   }
 });
 
@@ -160,7 +217,7 @@ router.patch('/:id(\\d+)/iniciar', async (req, res) => {
 
 /**
  * PATCH /patologista/:id/concluir
- * Passa de EM_ANALISE -> CONCLUIDO
+ * Passa de EM_ANALISE -> CONCLUIDO e registra passo em exam_steps (FINALIZACAO/CONCLUIDO)
  */
 router.patch('/:id(\\d+)/concluir', async (req, res) => {
   const bandejaId = Number(req.params.id);
@@ -172,8 +229,9 @@ router.patch('/:id(\\d+)/concluir', async (req, res) => {
   try {
     await query('BEGIN');
 
+    // travar linha e obter exam_id
     const cur = await query(
-      'SELECT tray_status, pathologist_id FROM exam_tray WHERE id=$1 FOR UPDATE',
+      'SELECT tray_status, pathologist_id, exam_id FROM exam_tray WHERE id=$1 FOR UPDATE',
       [bandejaId]
     );
     if (!cur.rowCount) {
@@ -185,12 +243,12 @@ router.patch('/:id(\\d+)/concluir', async (req, res) => {
       await query('ROLLBACK');
       return res.status(409).json({ error: 'status_invalido', from: row.tray_status });
     }
-    // opcional: só quem iniciou pode concluir
     if (row.pathologist_id && row.pathologist_id !== patologistaId) {
       await query('ROLLBACK');
       return res.status(403).json({ error: 'nao_autorizado_para_concluir' });
     }
 
+    // concluir bandeja
     const upd = await query(
       `
       UPDATE exam_tray
@@ -205,6 +263,25 @@ router.patch('/:id(\\d+)/concluir', async (req, res) => {
       `,
       [patologistaId, bandejaId]
     );
+
+    // registrar passo CONCLUIDO no exam_steps (somente se ainda não estiver CONCLUIDO)
+    const examId = row.exam_id;
+    const last = await query(
+      `SELECT status
+         FROM exam_steps
+        WHERE exam_id = $1
+        ORDER BY started_at DESC, id DESC
+        LIMIT 1`,
+      [examId]
+    );
+    const lastStatus = last.rowCount ? last.rows[0].status : 'PENDENTE';
+    if (lastStatus !== 'CONCLUIDO') {
+      await query(
+        `INSERT INTO exam_steps (exam_id, step, status, responsible_id, started_at)
+         VALUES ($1, 'FINALIZACAO', 'CONCLUIDO', $2, NOW())`,
+        [examId, patologistaId]
+      );
+    }
 
     await query('COMMIT');
     return res.json(upd.rows[0]);
