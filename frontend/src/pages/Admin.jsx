@@ -1,3 +1,4 @@
+// src/pages/Admin.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import "../styles/admin.css";
 
@@ -10,17 +11,25 @@ export default function Admin() {
   const [msg, setMsg] = useState("");
   const [showCreate, setShowCreate] = useState(false);
 
+  // 🔹 Modais de cadastro rápido (Convênio / Tipo de exame)
+  const [showConvModal, setShowConvModal] = useState(false);
+  const [showExamTypeModal, setShowExamTypeModal] = useState(false);
+
   // toolbar
   const [q, setQ] = useState("");
   const [roleFilter, setRoleFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
 
+  // forms
   const [form, setForm] = useState({
     name: "",
     email: "",
     password: "",
     role: "FUNCIONARIO",
   });
+
+  const [convForm, setConvForm] = useState({ nome: "" });
+  const [examTypeForm, setExamTypeForm] = useState({ code: "", label: "" });
 
   async function load() {
     setLoading(true);
@@ -34,8 +43,11 @@ export default function Admin() {
       setLoading(false);
     }
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
+  // ===== Usuários =====
   async function createUser(e) {
     e?.preventDefault?.();
     setMsg("");
@@ -102,7 +114,55 @@ export default function Admin() {
     setMsg("Senha atualizada");
   }
 
-  // filtro client-side (rápido e simples)
+  // ===== Cadastro rápido: Convênio =====
+  async function createConvenio(e) {
+    e?.preventDefault?.();
+    if (!convForm.nome.trim()) return;
+    const res = await fetch(`${API}/catalog/convenios`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token()}`,
+      },
+      body: JSON.stringify({ nome: convForm.nome.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || "Erro ao salvar convênio");
+      return;
+    }
+    setConvForm({ nome: "" });
+    setShowConvModal(false);
+    alert("Convênio cadastrado!");
+  }
+
+  // ===== Cadastro rápido: Tipo de exame =====
+  async function createExamType(e) {
+    e?.preventDefault?.();
+    const payload = {
+      code: examTypeForm.code.trim().toUpperCase().replace(/\s+/g, "_"),
+      label: examTypeForm.label.trim(),
+    };
+    if (!payload.code || !payload.label) return;
+    const res = await fetch(`${API}/catalog/exam-types`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token()}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || "Erro ao salvar tipo de exame");
+      return;
+    }
+    setExamTypeForm({ code: "", label: "" });
+    setShowExamTypeModal(false);
+    alert("Tipo de exame cadastrado!");
+  }
+
+  // filtro client-side
   const filtered = useMemo(() => {
     const byQ = (u) =>
       !q ||
@@ -123,13 +183,27 @@ export default function Admin() {
       <header className="admin-header animate-drop">
         <div className="admin-header__titleblock">
           <h1 className="admin-title">Administração</h1>
-          <p className="admin-subtitle">
-            Gerencie usuários e configurações do sistema.
-          </p>
+          <p className="admin-subtitle">Gerencie usuários e cadastros do sistema.</p>
         </div>
       </header>
 
       <main className="admin-content">
+        {/* 🔹 AÇÕES RÁPIDAS (botões de cadastro que você sentiu falta) */}
+        <section className="card animate-fade" style={{ marginBottom: 16 }}>
+          <h3 className="card-title">Ações rápidas</h3>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+            <button className="btn-primary" onClick={() => setShowCreate(true)}>
+              + Novo usuário
+            </button>
+            <button className="btn-outline" onClick={() => setShowConvModal(true)}>
+              + Convênio
+            </button>
+            <button className="btn-outline" onClick={() => setShowExamTypeModal(true)}>
+              + Tipo de exame
+            </button>
+          </div>
+        </section>
+
         {/* Toolbar com busca e filtros */}
         <div className="toolbar card animate-fade">
           <div className="toolbar-left">
@@ -162,15 +236,12 @@ export default function Admin() {
             </select>
           </div>
 
-          <button
-            className="btn-primary btn-lg"
-            onClick={() => setShowCreate(true)}
-          >
+          <button className="btn-primary btn-lg" onClick={() => setShowCreate(true)}>
             + Novo usuário
           </button>
         </div>
 
-        {/* Lista */}
+        {/* Lista de usuários */}
         <section className="card animate-fade users-card">
           <h3 className="card-title">Usuários</h3>
 
@@ -194,35 +265,22 @@ export default function Admin() {
                       <td>{u.name}</td>
                       <td className="muted">{u.email}</td>
                       <td>
-                        <select
-                          value={u.role}
-                          onChange={(e) => changeRole(u, e.target.value)}
-                        >
+                        <select value={u.role} onChange={(e) => changeRole(u, e.target.value)}>
                           <option value="ADMIN">ADMIN</option>
                           <option value="FUNCIONARIO">FUNCIONARIO</option>
                           <option value="PATOLOGISTA">PATOLOGISTA</option>
                         </select>
                       </td>
                       <td>
-                        <span
-                          className={`badge ${
-                            u.enabled ? "badge--ok" : "badge--warn"
-                          }`}
-                        >
+                        <span className={`badge ${u.enabled ? "badge--ok" : "badge--warn"}`}>
                           {u.enabled ? "Ativo" : "Suspenso"}
                         </span>
                       </td>
                       <td className="actions">
-                        <button
-                          onClick={() => toggleEnabled(u)}
-                          className="btn-outline danger"
-                        >
+                        <button onClick={() => toggleEnabled(u)} className="btn-outline danger">
                           {u.enabled ? "Suspender" : "Reativar"}
                         </button>
-                        <button
-                          onClick={() => resetPassword(u)}
-                          className="btn-ghost"
-                        >
+                        <button onClick={() => resetPassword(u)} className="btn-ghost">
                           Resetar senha
                         </button>
                       </td>
@@ -242,20 +300,13 @@ export default function Admin() {
         </section>
       </main>
 
-      {/* Modal de criação */}
+      {/* Modal: Novo usuário */}
       {showCreate && (
         <div className="modal-backdrop" onClick={() => setShowCreate(false)}>
-          <div
-            className="modal card animate-pop"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="modal card animate-pop" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Novo usuário</h3>
-              <button
-                className="btn-ghost close"
-                onClick={() => setShowCreate(false)}
-                aria-label="Fechar"
-              >
+              <button className="btn-ghost close" onClick={() => setShowCreate(false)} aria-label="Fechar">
                 ✕
               </button>
             </div>
@@ -283,9 +334,7 @@ export default function Admin() {
                 className="input"
                 type="text"
                 value={form.password}
-                onChange={(e) =>
-                  setForm({ ...form, password: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
                 required
               />
               <label>Papel</label>
@@ -301,6 +350,67 @@ export default function Admin() {
 
               <button type="submit" className="btn-primary btn-lg">
                 Salvar
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: novo Convênio */}
+      {showConvModal && (
+        <div className="modal-backdrop" onClick={() => setShowConvModal(false)}>
+          <div className="modal card animate-pop" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Novo convênio</h3>
+              <button className="btn-ghost close" onClick={() => setShowConvModal(false)} aria-label="Fechar">
+                ✕
+              </button>
+            </div>
+
+            <form className="form-grid" onSubmit={createConvenio}>
+              <label>Nome do convênio</label>
+              <input
+                className="input"
+                value={convForm.nome}
+                onChange={(e) => setConvForm({ nome: e.target.value })}
+                required
+              />
+              <button type="submit" className="btn-primary btn-lg">
+                Cadastrar convênio
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: novo Tipo de exame */}
+      {showExamTypeModal && (
+        <div className="modal-backdrop" onClick={() => setShowExamTypeModal(false)}>
+          <div className="modal card animate-pop" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Novo tipo de exame</h3>
+              <button className="btn-ghost close" onClick={() => setShowExamTypeModal(false)} aria-label="Fechar">
+                ✕
+              </button>
+            </div>
+
+            <form className="form-grid" onSubmit={createExamType}>
+              <label>Código (sem espaços, ex.: CITOLOGIA_ONCOTICA)</label>
+              <input
+                className="input"
+                value={examTypeForm.code}
+                onChange={(e) => setExamTypeForm({ ...examTypeForm, code: e.target.value })}
+                required
+              />
+              <label>Nome/Label</label>
+              <input
+                className="input"
+                value={examTypeForm.label}
+                onChange={(e) => setExamTypeForm({ ...examTypeForm, label: e.target.value })}
+                required
+              />
+              <button type="submit" className="btn-primary btn-lg">
+                Cadastrar tipo de exame
               </button>
             </form>
           </div>

@@ -1,3 +1,4 @@
+// src/main.jsx
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
@@ -20,6 +21,9 @@ import StatusBoard from "./components/StatusBoard.jsx";
 
 // ✅ NOVO: página de impressão de etiquetas
 import PrintSlides from "./pages/PrintSlides.jsx";
+
+// ✅ REUTILIZA O RELATÓRIO DO FUNCIONÁRIO NA ÁREA DO PATOLOGISTA
+import RelatorioPatologista from "./pages/Funcionario/Relatorio.jsx";
 
 const router = createBrowserRouter([
   { path: "/", element: <Login /> },
@@ -58,17 +62,17 @@ const router = createBrowserRouter([
     path: "/patologista",
     element: (
       <Protected roles={["PATOLOGISTA", "ADMIN"]}>
-        {/* coloque só PATOLOGISTA se preferir */}
         <Patologista />
       </Protected>
     ),
     children: [
-      { index: true, element: <QueuePatologista /> }, // FILA como página inicial do patologista
+      { index: true, element: <QueuePatologista /> }, // FILA do dia
+      { path: "relatorio", element: <RelatorioPatologista /> }, // ✅ mesmo relatório reutilizado
       // futuro: { path: "meus", element: <QueuePatologista mode="MEUS" /> },
     ],
   },
 
-  // ✅ NOVO: rota de impressão de etiquetas (abre página limpa para o print)
+  // ✅ NOVO: rota de impressão de etiquetas
   {
     path: "/print/slides/:examId",
     element: (

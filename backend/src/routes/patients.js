@@ -59,31 +59,65 @@ router.get('/search', async (req, res) => {
 })
 
 // ==============================
-// Listagem básica (+ filtro por nome via ?q=)
+// Listagem com flags de preparo (+ filtro por nome via ?q=)
+// Devolve: has_em_preparo (bool) e last_status (string)
 // ==============================
 router.get('/', async (req, res) => {
   try {
     const q = String(req.query.q || '').trim()
-    let r
+    const params = []
+    const where = []
+
     if (q && q.length >= 2) {
-      r = await query(
-        `SELECT p.id, p.name, p.birthdate, p.convenio_id, c.nome AS convenio_nome
-           FROM patients p
-      LEFT JOIN convenios c ON c.id = p.convenio_id
-          WHERE p.name ILIKE $1
-          ORDER BY p.name
-          LIMIT 100`,
-        [`%${q}%`]
-      )
-    } else {
-      r = await query(
-        `SELECT p.id, p.name, p.birthdate, p.convenio_id, c.nome AS convenio_nome
-           FROM patients p
-      LEFT JOIN convenios c ON c.id = p.convenio_id
-          ORDER BY p.created_at DESC, p.id DESC
-          LIMIT 100`
-      )
+      params.push(`%${q}%`)
+      where.push(`p.name ILIKE $${params.length}`)
     }
+
+    const orderBy = (q && q.length >= 2)
+      ? 'p.name'
+      : 'p.created_at DESC, p.id DESC'
+
+    const sql = `
+      WITH last_step_per_exam AS (
+        SELECT DISTINCT ON (s.exam_id)
+               s.exam_id, s.status, s.started_at, s.id
+          FROM exam_steps s
+         ORDER BY s.exam_id, s.started_at DESC, s.id DESC
+      )
+      SELECT
+        p.id,
+        p.name,
+        p.birthdate,
+        p.convenio_id,
+        c.nome AS convenio_nome,
+
+        -- Algum exame do paciente está EM_PREPARO_INICIAL?
+        EXISTS (
+          SELECT 1
+            FROM exams e
+            JOIN last_step_per_exam ls ON ls.exam_id = e.id
+           WHERE e.patient_id = p.id
+             AND ls.status = 'EM_PREPARO_INICIAL'
+        ) AS has_em_preparo,
+
+        -- Último status considerando o exame mais recente do paciente
+        COALESCE((
+          SELECT ls.status
+            FROM exams e
+            JOIN last_step_per_exam ls ON ls.exam_id = e.id
+           WHERE e.patient_id = p.id
+           ORDER BY e.created_at DESC
+           LIMIT 1
+        ), 'PENDENTE') AS last_status
+
+      FROM patients p
+      LEFT JOIN convenios c ON c.id = p.convenio_id
+      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+      ORDER BY ${orderBy}
+      LIMIT 100
+    `
+
+    const r = await query(sql, params)
     res.json(r.rows)
   } catch (e) {
     console.error('GET /patients', e)
@@ -162,7 +196,6 @@ router.get('/:id(\\d+)/exams', async (req, res) => {
 // ==============================
 // (NOVO) Histórico do paciente
 // GET /patients/:id/history
-// Retorna últimos exames (id, tipo, prioridade, criado_em)
 // ==============================
 router.get('/:id(\\d+)/history', async (req, res) => {
   const id = Number(req.params.id)
@@ -185,10 +218,6 @@ router.get('/:id(\\d+)/history', async (req, res) => {
 
 // ==============================
 // Iniciar paciente: cria/atualiza paciente e cria EXAME
-// body: {
-//   patient: { id?, name, cpf?, phone?, birthdate?, convenio_id? },
-//   exam:    { type, priority?=4 }
-// }
 // ==============================
 router.post('/initiate', async (req, res) => {
   try {
@@ -203,11 +232,9 @@ router.post('/initiate', async (req, res) => {
     } = patient
     const { type, priority = 4 } = exam
 
-    // validações
     if (!id && !name) return res.status(400).json({ error: 'Informe o nome do paciente.' })
     if (!type)        return res.status(400).json({ error: 'Informe o tipo de exame.' })
 
-    // normalizações
     const cpfDigits   = cpf ? onlyDigits(cpf)   : null
     const phoneDigits = phone ? onlyDigits(phone) : null
     if (cpfDigits && cpfDigits.length !== 11) {
@@ -216,7 +243,6 @@ router.post('/initiate', async (req, res) => {
 
     await query('BEGIN')
 
-    // cria ou atualiza paciente
     let patientId = id ? Number(id) : null
     if (!patientId) {
       const ins = await query(
@@ -239,7 +265,6 @@ router.post('/initiate', async (req, res) => {
       )
     }
 
-    // cria exame
     const insExam = await query(
       `INSERT INTO exams (patient_id, type, priority, created_at)
        VALUES ($1, $2, $3, NOW())

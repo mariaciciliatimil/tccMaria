@@ -25,22 +25,52 @@ router.get('/responsaveis', async (_req, res) => {
 });
 
 /**
- * BOARD: PENDENTE | EM_PREPARO_INICIAL | CONCLUIDO
+ * BOARD: PENDENTE | EM_PREPARO_INICIAL | CONCLUIDO | ANALISADO
+ * - PENDENTE/EM_PREPARO_INICIAL/CONCLUIDO: último status em exam_steps
+ *   (mas CONCLUIDO EXCLUI o que já está ANALISADO hoje)
+ * - ANALISADO: exames finalizados pelo patologista hoje (exam_tray.CONCLUIDO)
  */
 router.get('/board', async (_req, res) => {
+  // Contadores (com exclusão dos analisados de hoje ao contar CONCLUIDO)
   const countsSql = `
     WITH last_steps AS (
       SELECT DISTINCT ON (exam_id) exam_id, status
       FROM exam_steps
       ORDER BY exam_id, started_at DESC, id DESC
+    ),
+    today_analyzed AS (
+      SELECT DISTINCT exam_id
+      FROM exam_tray
+      WHERE tray_status = 'CONCLUIDO'
+        AND finished_at::date = CURRENT_DATE
     )
-    SELECT COALESCE(ls.status, 'PENDENTE') AS status, COUNT(*)::int AS count
-    FROM exams e
-    LEFT JOIN last_steps ls ON ls.exam_id = e.id
-    GROUP BY COALESCE(ls.status, 'PENDENTE')
+    -- PENDENTE
+    SELECT 'PENDENTE' AS bucket, COUNT(*)::int AS count
+      FROM exams e
+      LEFT JOIN last_steps ls ON ls.exam_id = e.id
+     WHERE COALESCE(ls.status,'PENDENTE') = 'PENDENTE'
+    UNION ALL
+    -- EM_PREPARO_INICIAL
+    SELECT 'EM_PREPARO_INICIAL', COUNT(*)::int
+      FROM exams e
+      LEFT JOIN last_steps ls ON ls.exam_id = e.id
+     WHERE COALESCE(ls.status,'PENDENTE') = 'EM_PREPARO_INICIAL'
+    UNION ALL
+    -- CONCLUIDO (exclui analisados hoje)
+    SELECT 'CONCLUIDO', COUNT(*)::int
+      FROM exams e
+      LEFT JOIN last_steps ls ON ls.exam_id = e.id
+      LEFT JOIN today_analyzed ta ON ta.exam_id = e.id
+     WHERE COALESCE(ls.status,'PENDENTE') = 'CONCLUIDO'
+       AND ta.exam_id IS NULL
+    UNION ALL
+    -- ANALISADO (somente hoje)
+    SELECT 'ANALISADO', COUNT(*)::int
+      FROM today_analyzed
   `;
 
-  const itemsSql = `
+  // Itens para PENDENTE/EM_PREPARO_INICIAL
+  const itemsByStatusSql = `
     WITH last_steps AS (
       SELECT DISTINCT ON (exam_id) exam_id, status
       FROM exam_steps
@@ -55,21 +85,70 @@ router.get('/board', async (_req, res) => {
       e.created_at
     FROM exams e
     LEFT JOIN last_steps ls ON ls.exam_id = e.id
-    LEFT JOIN patients p ON p.id = e.patient_id
+    LEFT JOIN patients p    ON p.id = e.patient_id
     WHERE COALESCE(ls.status,'PENDENTE') = $1
     ORDER BY e.created_at DESC
-    LIMIT 20
+    LIMIT 50
+  `;
+
+  // Itens para CONCLUIDO (exclui analisados hoje)
+  const itemsConcluidoSql = `
+    WITH last_steps AS (
+      SELECT DISTINCT ON (exam_id) exam_id, status
+      FROM exam_steps
+      ORDER BY exam_id, started_at DESC, id DESC
+    ),
+    today_analyzed AS (
+      SELECT DISTINCT exam_id
+      FROM exam_tray
+      WHERE tray_status = 'CONCLUIDO'
+        AND finished_at::date = CURRENT_DATE
+    )
+    SELECT
+      e.id,
+      e.type,
+      e.priority,
+      COALESCE(ls.status,'PENDENTE') AS status,
+      p.name AS patient_name,
+      e.created_at
+    FROM exams e
+    LEFT JOIN last_steps ls   ON ls.exam_id = e.id
+    LEFT JOIN today_analyzed ta ON ta.exam_id = e.id
+    LEFT JOIN patients p      ON p.id = e.patient_id
+    WHERE COALESCE(ls.status,'PENDENTE') = 'CONCLUIDO'
+      AND ta.exam_id IS NULL
+    ORDER BY e.created_at DESC
+    LIMIT 50
+  `;
+
+  // Itens ANALISADO (finalizados hoje)
+  const itemsAnalisadoSql = `
+    SELECT
+      e.id,
+      e.type,
+      e.priority,
+      p.name        AS patient_name,
+      e.created_at,
+      t.finished_at AS analyzed_at
+    FROM exam_tray t
+    JOIN exams e    ON e.id = t.exam_id
+    JOIN patients p ON p.id = e.patient_id
+    WHERE t.tray_status = 'CONCLUIDO'
+      AND t.finished_at::date = CURRENT_DATE
+    ORDER BY t.finished_at DESC NULLS LAST, e.created_at DESC
+    LIMIT 50
   `;
 
   try {
     const countsRes = await query(countsSql);
-    const counts = { PENDENTE: 0, EM_PREPARO_INICIAL: 0, CONCLUIDO: 0 };
-    for (const r of countsRes.rows) if (counts[r.status] !== undefined) counts[r.status] = r.count;
+    const counts = { PENDENTE: 0, EM_PREPARO_INICIAL: 0, CONCLUIDO: 0, ANALISADO: 0 };
+    for (const r of countsRes.rows) counts[r.bucket] = r.count;
 
-    const [pend, prep, done] = await Promise.all([
-      query(itemsSql, ['PENDENTE']),
-      query(itemsSql, ['EM_PREPARO_INICIAL']),
-      query(itemsSql, ['CONCLUIDO']),
+    const [pend, prep, done, anal] = await Promise.all([
+      query(itemsByStatusSql, ['PENDENTE']),
+      query(itemsByStatusSql, ['EM_PREPARO_INICIAL']),
+      query(itemsConcluidoSql),
+      query(itemsAnalisadoSql),
     ]);
 
     res.json({
@@ -77,11 +156,12 @@ router.get('/board', async (_req, res) => {
       columns: {
         PENDENTE: pend.rows,
         EM_PREPARO_INICIAL: prep.rows,
-        CONCLUIDO: done.rows
+        CONCLUIDO: done.rows,
+        ANALISADO: anal.rows,
       }
     });
   } catch (e) {
-    console.error(e);
+    console.error('GET /exams/board', e);
     res.status(500).json({ error: 'Erro ao montar board' });
   }
 });
@@ -247,14 +327,12 @@ router.post('/:id(\\d+)/start-prep', async (req, res) => {
   try {
     await query('BEGIN');
 
-    // Exame existe?
     const e = await query('SELECT id FROM exams WHERE id = $1', [examId]);
     if (e.rowCount === 0) {
       await query('ROLLBACK');
       return res.status(404).json({ error: 'Exame não encontrado.' });
     }
 
-    // Último status precisa ser PENDENTE
     const last = await query(
       `SELECT status
          FROM exam_steps
@@ -269,7 +347,6 @@ router.post('/:id(\\d+)/start-prep', async (req, res) => {
       return res.status(409).json({ error: `Exame não está pendente (status atual: ${lastStatus}).` });
     }
 
-    // responsável válido?
     const u = await query(
       `SELECT id, name
          FROM users
@@ -284,7 +361,6 @@ router.post('/:id(\\d+)/start-prep', async (req, res) => {
     }
     const respName = u.rows[0].name;
 
-    // Atualiza metadados do preparo
     await query(
       `UPDATE exams
           SET prep_laminas = $1,
@@ -294,29 +370,31 @@ router.post('/:id(\\d+)/start-prep', async (req, res) => {
       [qtd, respName, examId]
     );
 
-    // Recria etiquetas de forma idempotente (tipagem explícita p/ evitar erro do $1)
+    // Recria etiquetas (idempotente)
     await query('DELETE FROM exam_slides WHERE exam_id = $1::int', [examId]);
 
     await query(
-      `INSERT INTO exam_slides (exam_id, seq, label)
+      `INSERT INTO exam_slides (exam_id, code, status, created_by, seq, label, created_at)
        SELECT
-         $1::int                                           AS exam_id,
-         gs::int                                           AS seq,
-         (($1::int)::text || '_' || gs::int::text)         AS label
-       FROM generate_series(1, $2::int) AS gs`,
-      [examId, qtd]
+         $1::int                                         AS exam_id,
+         ($1::text || '-' || LPAD(gs::text, 2, '0'))     AS code,        -- ex: 45-01
+         'GERADA'                                        AS status,
+         $2::int                                         AS created_by,
+         gs::int                                         AS seq,
+         ('Lâmina ' || LPAD(gs::text, 2, '0'))           AS label,
+         NOW()                                           AS created_at
+       FROM generate_series(1, $3::int) AS gs`,
+      [examId, respId, qtd]
     );
 
-    // Registra etapa EM_PREPARO_INICIAL
     await query(
       `INSERT INTO exam_steps (exam_id, step, status, responsible_id, started_at)
        VALUES ($1, 'PREPARO_INICIAL', 'EM_PREPARO_INICIAL', $2, NOW())`,
       [examId, respId]
     );
 
-    // Busca as etiquetas criadas
     const slidesRes = await query(
-      `SELECT seq, label, printed_at
+      `SELECT seq, code, label, printed_at
          FROM exam_slides
         WHERE exam_id = $1::int
         ORDER BY seq`,
@@ -344,8 +422,8 @@ router.patch('/:id(\\d+)/priority', async (req, res) => {
   const examId = Number(req.params.id);
   const { priority } = req.body || {};
   if (!examId) return res.status(400).json({ error: 'ID inválido.' });
-  if (![1, 2, 3].includes(Number(priority))) {
-    return res.status(400).json({ error: 'Prioridade inválida (1=Alta, 2=Média, 3=Normal).' });
+  if (![1, 2, 3, 4].includes(Number(priority))) {
+    return res.status(400).json({ error: 'Prioridade inválida (1–4).' });
   }
 
   const role = req.user?.role;
@@ -589,7 +667,7 @@ router.get('/:id(\\d+)/slides', async (req, res) => {
   const examId = Number(req.params.id);
   try {
     const r = await query(
-      `SELECT seq, label, printed_at
+      `SELECT seq, code, label, printed_at
          FROM exam_slides
         WHERE exam_id = $1::int
         ORDER BY seq`,
